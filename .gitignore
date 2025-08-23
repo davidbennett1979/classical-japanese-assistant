@@ -34,12 +34,11 @@ Thumbs.db
 
 # Application specific
 chroma_db/
-processed_docs/
+processed_docs/*.png
+processed_docs/*.jpg
+processed_docs/*.jpeg
 *.db
 *.sqlite
-*.json
-!requirements.json
-!package.json
 
 # Models (too large for git)
 models/

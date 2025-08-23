@@ -86,8 +86,12 @@ class JapaneseVectorStore:
         texts = [doc['text'] for doc in documents]
         metadatas = [doc['metadata'] for doc in documents]
         
-        # Generate unique IDs
-        ids = [hashlib.md5(text.encode()).hexdigest() for text in texts]
+        # Generate unique IDs using text content + metadata for uniqueness
+        ids = []
+        for i, (text, metadata) in enumerate(zip(texts, metadatas)):
+            # Include metadata info to ensure uniqueness
+            unique_string = f"{text}_{metadata.get('page', '')}_{metadata.get('source', '')}_{i}"
+            ids.append(hashlib.md5(unique_string.encode()).hexdigest())
         
         # Generate embeddings
         embeddings = self.embedder.encode(texts).tolist()

@@ -3,11 +3,19 @@ from rag_assistant import ClassicalJapaneseAssistant
 from vector_store import JapaneseVectorStore
 from ocr_pipeline import JapaneseOCR
 import json
+import os
+import glob
 
 # Initialize components
 vector_store = JapaneseVectorStore()
 assistant = ClassicalJapaneseAssistant(vector_store)
 ocr = JapaneseOCR()
+
+# Load available prompts dynamically
+def get_available_prompts():
+    """Dynamically load all .md files from prompts folder"""
+    prompt_files = glob.glob("prompts/*.md")
+    return sorted(prompt_files) if prompt_files else ["prompts/classical_japanese_tutor.md"]
 
 def chat_function(message, history):
     """Main chat interface"""
@@ -18,7 +26,10 @@ def chat_function(message, history):
     for i, source in enumerate(result['sources']):
         response += f"- [{i+1}] {source['source']}, Page {source['page']}\n"
     
-    return response
+    # Return in the correct format for Gradio Chatbot (append to history)
+    history = history or []
+    history.append((message, response))
+    return history
 
 def add_note_function(note_text, topic):
     """Add personal note"""
@@ -39,7 +50,17 @@ def process_new_document(file):
 
 def search_examples(grammar_point):
     """Search for examples of specific grammar"""
+    # Use grammar-focused prompt for this tab
+    original_prompt = assistant.prompt_template
+    grammar_prompt = getattr(assistant, 'grammar_prompt_path', 'prompts/grammar_focused.md')
+    
+    if os.path.exists(grammar_prompt):
+        assistant.prompt_template = assistant.load_prompt_template(grammar_prompt)
+    
     result = assistant.explain_grammar(grammar_point)
+    
+    # Restore original prompt
+    assistant.prompt_template = original_prompt
     return result['answer']
 
 # Create Gradio interface
@@ -55,8 +76,10 @@ with gr.Blocks(title="Classical Japanese Learning Assistant") as app:
         )
         clear = gr.Button("Clear")
         
-        msg.submit(chat_function, [msg, chatbot], [chatbot])
-        clear.click(lambda: None, None, chatbot, queue=False)
+        msg.submit(chat_function, [msg, chatbot], [chatbot]).then(
+            lambda: "", None, msg  # Clear the input after sending
+        )
+        clear.click(lambda: [], None, chatbot, queue=False)
     
     with gr.Tab("Add Notes"):
         note_input = gr.Textbox(
@@ -95,18 +118,119 @@ with gr.Blocks(title="Classical Japanese Learning Assistant") as app:
     
     with gr.Tab("Settings"):
         gr.Markdown("### Model Settings")
+        
+        # Get available models from Ollama
+        def get_installed_models():
+            try:
+                import subprocess
+                result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')[1:]  # Skip header
+                    models = [line.split()[0] for line in lines if line]
+                    return models if models else ["qwen2.5:72b"]
+            except:
+                return ["qwen2.5:72b"]
+        
+        installed_models = get_installed_models()
+        suggested_models = [
+            "qwen2.5:72b",
+            "llama3.1:70b", 
+            "llama3.1:70b-instruct",
+            "deepseek-coder-v2:16b",
+            "command-r:35b",
+            "mixtral:8x7b"
+        ]
+        
         model_dropdown = gr.Dropdown(
-            choices=["qwen2.5:72b", "llama3.1:70b"],
-            value="qwen2.5:72b",
-            label="Select Model"
+            choices=installed_models,
+            value=installed_models[0] if installed_models else "qwen2.5:72b",
+            label="Select Model",
+            info="Choose from installed models"
         )
         
+        def switch_model(model_name):
+            assistant.model_name = model_name
+            return f"Switched to model: {model_name}"
+        
+        model_status = gr.Textbox(label="Model Status", interactive=False, value=f"Current: {assistant.model_name}")
+        model_dropdown.change(switch_model, model_dropdown, model_status)
+        
+        gr.Markdown("""#### 📦 Recommended Models for Your System (192GB RAM):
+        - **qwen2.5:72b** (47GB) - Current, excellent for Japanese
+        - **llama3.1:70b** (40GB) - Very strong general model
+        - **command-r:35b** (20GB) - Good for RAG tasks
+        - **deepseek-coder-v2:16b** (9GB) - If analyzing code
+        - **mixtral:8x7b** (26GB) - Fast, good quality
+        
+        To install: `ollama pull model_name`
+        """)
+        
+        gr.Markdown("### Prompt Settings")
+        gr.Markdown("Configure which prompts to use for each section:")
+        
+        with gr.Row():
+            with gr.Column():
+                chat_prompt_dropdown = gr.Dropdown(
+                    choices=get_available_prompts(),
+                    value="prompts/classical_japanese_tutor.md",
+                    label="Chat Tab Prompt",
+                    interactive=True
+                )
+                
+            with gr.Column():
+                grammar_prompt_dropdown = gr.Dropdown(
+                    choices=get_available_prompts(),
+                    value="prompts/grammar_focused.md" if "prompts/grammar_focused.md" in get_available_prompts() else get_available_prompts()[0],
+                    label="Grammar Search Prompt",
+                    interactive=True
+                )
+        
+        refresh_prompts_btn = gr.Button("🔄 Refresh Prompt List")
+        prompt_status = gr.Textbox(label="Status", interactive=False, value="Prompts loaded")
+        
+        def update_chat_prompt(prompt_file):
+            assistant.prompt_template = assistant.load_prompt_template(prompt_file)
+            return f"Chat prompt updated to: {os.path.basename(prompt_file)}"
+        
+        def update_grammar_prompt(prompt_file):
+            # Store grammar prompt path for use in search_examples
+            assistant.grammar_prompt_path = prompt_file
+            return f"Grammar prompt updated to: {os.path.basename(prompt_file)}"
+        
+        def refresh_prompt_list():
+            prompts = get_available_prompts()
+            return (
+                gr.update(choices=prompts),
+                gr.update(choices=prompts),
+                f"Found {len(prompts)} prompt files"
+            )
+        
+        chat_prompt_dropdown.change(update_chat_prompt, chat_prompt_dropdown, prompt_status)
+        grammar_prompt_dropdown.change(update_grammar_prompt, grammar_prompt_dropdown, prompt_status)
+        refresh_prompts_btn.click(refresh_prompt_list, None, [chat_prompt_dropdown, grammar_prompt_dropdown, prompt_status])
+        
+        # Add model refresh button
+        refresh_models_btn = gr.Button("🔄 Refresh Model List")
+        
+        def refresh_models():
+            models = get_installed_models()
+            return gr.update(choices=models), f"Found {len(models)} installed models"
+        
+        refresh_models_btn.click(refresh_models, None, [model_dropdown, model_status])
+        
         gr.Markdown("### Database Info")
-        gr.Textbox(
-            value=f"Documents in database: {vector_store.collection.count()}",
+        stats_box = gr.Textbox(
+            value="Click 'Refresh Stats' to update",
             label="Statistics",
             interactive=False
         )
+        refresh_btn = gr.Button("Refresh Stats")
+        
+        def update_stats():
+            count = vector_store.collection.count()
+            return f"Documents in database: {count:,}"
+        
+        refresh_btn.click(update_stats, None, stats_box)
 
 # Launch the app
 if __name__ == "__main__":
