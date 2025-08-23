@@ -39,14 +39,34 @@ def add_note_function(note_text, topic):
 def process_new_document(file):
     """Process uploaded PDF or image"""
     if file.name.endswith('.pdf'):
-        text_data = ocr.process_pdf(file.name)
+        # PDF processing returns pre-chunked data
+        processed_chunks = ocr.process_pdf(file.name)
+        
+        # Convert to vector store format
+        chunks = []
+        for chunk in processed_chunks:
+            chunks.append({
+                'text': chunk.get('text', ''),
+                'metadata': {
+                    'page': chunk.get('page_number', 0),
+                    'source': chunk.get('source_pdf', 'unknown'),
+                    'type': chunk.get('type', 'text')
+                }
+            })
     else:
+        # Single image processing - needs chunking
         text_data = ocr.extract_text_with_coordinates(file.name)
+        chunks = vector_store.chunk_text(text_data)
     
-    chunks = vector_store.chunk_text(text_data)
-    vector_store.add_documents(chunks)
+    # Add to vector store in batches to handle large documents
+    batch_size = 5000
+    total_chunks = len(chunks)
     
-    return f"Processed and added {len(chunks)} text chunks to database"
+    for i in range(0, total_chunks, batch_size):
+        batch = chunks[i:i+batch_size]
+        vector_store.add_documents(batch)
+    
+    return f"Processed and added {total_chunks:,} text chunks to database"
 
 def search_examples(grammar_point):
     """Search for examples of specific grammar"""
