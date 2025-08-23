@@ -152,7 +152,16 @@ def get_database_stats():
     """Get current database statistics"""
     stats = db_manager.get_textbook_stats()
     if 'error' in stats:
-        return f"❌ Error: {stats['error']}", ""
+        return f"❌ Error: {stats['error']}", "", ""
+    
+    # Get PNG statistics
+    png_info = db_manager.get_png_stats()
+    png_summary = ""
+    if png_info['count'] > 0:
+        size_display = f"{png_info['size_gb']} GB" if png_info['size_gb'] >= 1 else f"{png_info['size_mb']} MB"
+        png_summary = f"📁 **PNG Files**: {png_info['count']} files ({size_display} total)"
+    else:
+        png_summary = "📁 **PNG Files**: No PNG files found"
     
     # Format textbook list
     textbook_list = []
@@ -165,6 +174,7 @@ def get_database_stats():
 **Total Documents**: {stats['total_documents']:,} chunks
 **Textbooks**: {len(stats['textbooks'])} books
 **Duplicates Found**: {stats['duplicates']:,} entries need cleanup
+{png_summary}
 
 ### Textbooks in Database:
 {textbook_info}
@@ -172,7 +182,7 @@ def get_database_stats():
     
     # Create dropdown options for deletion
     textbook_options = list(stats['textbooks'].keys())
-    return summary, textbook_options
+    return summary, textbook_options, png_summary
 
 def delete_textbook_func(textbook_name, confirm_text):
     """Delete a textbook from the database"""
@@ -311,6 +321,24 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
                 clean_dups_btn = gr.Button("Clean Duplicates", variant="secondary")
                 clean_status = gr.Textbox(label="Cleanup Status", interactive=False)
         
+        # PNG cleanup section
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### 📁 Clean PNG Files")
+                gr.Markdown("**⚠️ PNG files are used for OCR processing. Delete only after confirming database is working correctly.**")
+                gr.Markdown("This will delete ALL PNG files in processed_docs folder. JSON files will be preserved for recovery.")
+                
+                png_stats = gr.Markdown("Click 'Refresh Stats' above to view PNG file information")
+                
+                png_confirm_input = gr.Textbox(
+                    label="Confirmation Required",
+                    placeholder="Type 'DELETE PNGs' to confirm",
+                    info="Type exactly: DELETE PNGs"
+                )
+                
+                delete_pngs_btn = gr.Button("🗑️ Delete PNG Files", variant="stop")
+                png_delete_status = gr.Textbox(label="PNG Deletion Status", interactive=False)
+        
         # Delete textbook section  
         with gr.Row():
             with gr.Column():
@@ -334,12 +362,29 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         
         # Wire up the functions
         def refresh_stats():
-            stats_text, textbook_options = get_database_stats()
-            return stats_text, gr.update(choices=textbook_options)
+            stats_text, textbook_options, png_info = get_database_stats()
+            return stats_text, gr.update(choices=textbook_options), png_info
+        
+        def delete_png_files_func(confirm_text):
+            """Delete PNG files after confirmation"""
+            if confirm_text != "DELETE PNGs":
+                return "❌ Please type 'DELETE PNGs' exactly to confirm deletion."
+            
+            result = db_manager.delete_png_files()
+            if result['success']:
+                return f"✅ {result['message']}"
+            else:
+                return f"❌ {result['message']}"
         
         refresh_stats_btn.click(
             refresh_stats,
-            outputs=[db_stats, textbook_dropdown]
+            outputs=[db_stats, textbook_dropdown, png_stats]
+        )
+        
+        delete_pngs_btn.click(
+            delete_png_files_func,
+            inputs=[png_confirm_input],
+            outputs=[png_delete_status]
         )
         
         clean_dups_btn.click(
@@ -358,31 +403,47 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         
         # Get available models from Ollama
         def get_installed_models():
+            """Get list of installed Ollama models"""
             try:
                 import subprocess
                 result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
                 if result.returncode == 0:
-                    lines = result.stdout.strip().split('\n')[1:]  # Skip header
-                    models = [line.split()[0] for line in lines if line]
-                    return models if models else ["qwen2.5:72b"]
-            except:
-                return ["qwen2.5:72b"]
+                    lines = result.stdout.strip().split('\n')
+                    if len(lines) > 1:  # Skip header line
+                        models = []
+                        for line in lines[1:]:
+                            if line.strip():
+                                # Model name is the first column (before the first space)
+                                parts = line.strip().split()
+                                if parts:
+                                    models.append(parts[0])
+                        return models if models else []
+                return []
+            except Exception as e:
+                print(f"Error getting models: {e}")
+                return []
         
+        # Get installed models on startup
         installed_models = get_installed_models()
-        suggested_models = [
-            "qwen2.5:72b",
-            "llama3.1:70b", 
-            "llama3.1:70b-instruct",
-            "deepseek-coder-v2:16b",
-            "command-r:35b",
-            "mixtral:8x7b"
-        ]
+        
+        # Set initial model - use current model or first available
+        if not installed_models:
+            print("Warning: No Ollama models found. Please install at least one model.")
+            current_model = assistant.model_name
+        else:
+            # Check if current model is in the list, otherwise use first available
+            if assistant.model_name in installed_models:
+                current_model = assistant.model_name
+            else:
+                current_model = installed_models[0]
+                assistant.model_name = current_model  # Update assistant with first available model
+                print(f"Switched to available model: {current_model}")
         
         model_dropdown = gr.Dropdown(
             choices=installed_models,
-            value=installed_models[0] if installed_models else "qwen2.5:72b",
+            value=current_model if installed_models else None,
             label="Select Model",
-            info="Choose from installed models"
+            info="Choose from installed Ollama models"
         )
         
         def switch_model(model_name):
@@ -450,8 +511,14 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         refresh_models_btn = gr.Button("🔄 Refresh Model List")
         
         def refresh_models():
+            """Refresh the list of available models"""
             models = get_installed_models()
-            return gr.update(choices=models), f"Found {len(models)} installed models"
+            if not models:
+                return gr.update(choices=[], value=None), "No models found. Please install Ollama models."
+            
+            # Keep current selection if it's still available
+            current_value = assistant.model_name if assistant.model_name in models else models[0]
+            return gr.update(choices=models, value=current_value), f"Found {len(models)} installed models: {', '.join(models)}"
         
         refresh_models_btn.click(refresh_models, None, [model_dropdown, model_status])
         

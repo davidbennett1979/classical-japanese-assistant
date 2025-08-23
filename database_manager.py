@@ -147,6 +147,98 @@ class DatabaseManager:
                 
         except Exception as e:
             return {'success': False, 'message': f'Error cleaning duplicates: {str(e)}'}
+    
+    def get_png_stats(self):
+        """Get statistics about PNG files in processed_docs directory"""
+        try:
+            import glob
+            import os
+            
+            png_dir = "./processed_docs"
+            # Get ALL PNG files, not just page_*.png
+            png_files = glob.glob(os.path.join(png_dir, "*.png"))
+            
+            if not png_files:
+                return {
+                    'count': 0,
+                    'size_gb': 0,
+                    'size_mb': 0,
+                    'message': 'No PNG files found'
+                }
+            
+            # Calculate total size
+            total_size_bytes = sum(os.path.getsize(f) for f in png_files)
+            size_mb = total_size_bytes / (1024 * 1024)
+            size_gb = total_size_bytes / (1024 * 1024 * 1024)
+            
+            return {
+                'count': len(png_files),
+                'size_gb': round(size_gb, 2),
+                'size_mb': round(size_mb, 1),
+                'message': f'Found {len(png_files)} PNG files',
+                'files': png_files  # In case we need the list
+            }
+        except Exception as e:
+            return {
+                'count': 0,
+                'size_gb': 0,
+                'size_mb': 0,
+                'message': f'Error getting PNG stats: {str(e)}'
+            }
+    
+    def delete_png_files(self):
+        """Delete all PNG files from processed_docs, preserving JSON files"""
+        try:
+            import glob
+            import os
+            
+            png_dir = "./processed_docs"
+            # Delete ALL PNG files, not just page_*.png
+            png_files = glob.glob(os.path.join(png_dir, "*.png"))
+            
+            if not png_files:
+                return {
+                    'success': False,
+                    'message': 'No PNG files to delete',
+                    'deleted_count': 0
+                }
+            
+            # Count and size before deletion
+            count_before = len(png_files)
+            size_before = sum(os.path.getsize(f) for f in png_files) / (1024 * 1024)  # MB
+            
+            # Delete each PNG file
+            deleted_count = 0
+            failed_files = []
+            
+            for png_file in png_files:
+                try:
+                    os.remove(png_file)
+                    deleted_count += 1
+                except Exception as e:
+                    failed_files.append(png_file)
+            
+            if failed_files:
+                return {
+                    'success': False,
+                    'message': f'Deleted {deleted_count}/{count_before} PNG files. Failed to delete {len(failed_files)} files.',
+                    'deleted_count': deleted_count,
+                    'failed_files': failed_files
+                }
+            else:
+                return {
+                    'success': True,
+                    'message': f'Successfully deleted {deleted_count} PNG files ({size_before:.1f} MB freed)',
+                    'deleted_count': deleted_count,
+                    'size_freed_mb': size_before
+                }
+                
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f'Error deleting PNG files: {str(e)}',
+                'deleted_count': 0
+            }
 
 if __name__ == "__main__":
     db_mgr = DatabaseManager()

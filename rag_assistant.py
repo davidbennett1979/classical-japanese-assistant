@@ -1,14 +1,40 @@
 import requests
 import json
 import os
+import subprocess
 from typing import List, Dict
 
 class ClassicalJapaneseAssistant:
-    def __init__(self, vector_store, model_name="qwen2.5:72b", prompt_file="prompts/classical_japanese_tutor.md"):
+    def __init__(self, vector_store, model_name=None, prompt_file="prompts/classical_japanese_tutor.md"):
         self.vector_store = vector_store
+        
+        # If no model specified, try to get the first available model
+        if model_name is None:
+            model_name = self.get_first_available_model()
+            if model_name:
+                print(f"Using detected model: {model_name}")
+            else:
+                print("Warning: No Ollama models detected. Please install a model.")
+        
         self.model_name = model_name
         self.ollama_url = "http://localhost:11434/api/generate"
         self.prompt_template = self.load_prompt_template(prompt_file)
+    
+    def get_first_available_model(self):
+        """Get the first available Ollama model"""
+        try:
+            result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1:  # Skip header
+                    # Get first model name from first data line
+                    first_line = lines[1].strip()
+                    if first_line:
+                        model_name = first_line.split()[0]
+                        return model_name
+        except Exception as e:
+            print(f"Error detecting Ollama models: {e}")
+        return None
     
     def load_prompt_template(self, prompt_file: str) -> str:
         """Load prompt template from external file"""

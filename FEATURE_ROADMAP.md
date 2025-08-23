@@ -79,50 +79,71 @@ Transform this from a basic RAG assistant into the ultimate Classical Japanese l
 - Pitch accent notation
 - **Impact: LOW** - Nice to have
 
-## Priority 4: Content & Community 🤝
+## Priority 4: Recovery & Resilience 🔧
+*Handle interruptions and failures gracefully*
+
+### 12. **OCR Processing Recovery**
+- Resume interrupted OCR processing from last saved state
+- Incremental save progress every N pages
+- Ability to continue from existing PNG files
+- **Impact: HIGH** - Prevents data loss on large PDFs
+
+### 13. **Import Orphaned JSON Files**
+- Detect JSON files not in database
+- One-click import of processed but not imported files
+- Batch import multiple JSON files
+- **Impact: MEDIUM** - Useful for recovery scenarios
+
+### 14. **Processing Queue Management**
+- Visual queue for multiple document processing
+- Pause/resume processing
+- Retry failed documents
+- **Impact: MEDIUM** - Better UX for bulk imports
+
+## Priority 5: Content & Community 🤝
 *Expand beyond your textbook*
 
-### 12. **Pre-loaded Classical Texts**
+### 15. **Pre-loaded Classical Texts**
 - Tale of Genji excerpts
 - Kokinshū poems
 - Heike Monogatari passages
 - All public domain, pre-analyzed
 - **Impact: HIGH** - Instant content library
 
-### 13. **Community Features**
+### 16. **Community Features**
 - Share annotations
 - Discussion threads on passages
 - Upvote best explanations
 - **Impact: LOW** - Requires user base
 
-### 14. **Anki Export**
+### 17. **Anki Export**
 - One-click export to Anki
 - Pre-formatted cards
 - Include context sentences
 - **Impact: MEDIUM** - Integrates with existing tools
 
-## Priority 5: Specialized Tools 📚
+## Priority 6: Specialized Tools 📚
 *For serious scholars*
 
-### 15. **Poetry Analysis**
+### 18. **Poetry Analysis**
 - Meter detection (5-7-5-7-7)
 - Kakekotoba (pivot words) highlighting
 - Makurakotoba (pillow words) database
 - **Impact: LOW** - Niche but powerful
 
-### 16. **Manuscript Viewer**
+### 19. **Manuscript Viewer**
 - Load images of original texts
 - Overlay your transcription
 - Compare different manuscripts
 - **Impact: LOW** - For researchers
 
-### 17. **Grammar Timeline**
+### 20. **Grammar Timeline**
 - Visualize how grammar evolved
 - From Old Japanese to Modern
 - Interactive examples
 - **Impact: LOW** - Educational but complex
 
-### 18. **Handwriting Practice**
+### 21. **Handwriting Practice**
 - Draw characters with finger/stylus
 - Stroke order guides
 - Historical character variants (hentaigana)
