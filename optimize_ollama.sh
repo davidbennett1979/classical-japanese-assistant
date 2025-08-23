@@ -13,11 +13,11 @@ launchctl setenv OLLAMA_NUM_PARALLEL "4"
 # Allow multiple models loaded simultaneously
 launchctl setenv OLLAMA_MAX_LOADED_MODELS "2"
 
-# Set much larger context window for the 72B model (max is 32768)
-launchctl setenv OLLAMA_NUM_CTX "16384"
+# Set reasonable context window (reduce for faster inference)
+launchctl setenv OLLAMA_NUM_CTX "4096"
 
-# Use all available GPU cores
-launchctl setenv OLLAMA_NUM_GPU "999"
+# Use actual GPU cores (M2 Ultra has 76 GPU cores)
+launchctl setenv OLLAMA_NUM_GPU "76"
 
 echo "Environment variables set. Restarting Ollama..."
 
@@ -33,8 +33,8 @@ echo "Current settings:"
 echo "- OLLAMA_KEEP_ALIVE: 30m (keeps model in memory)"
 echo "- OLLAMA_NUM_PARALLEL: 4 (parallel requests)"
 echo "- OLLAMA_MAX_LOADED_MODELS: 2"
-echo "- OLLAMA_NUM_CTX: 16384 (2x larger context)"
-echo "- OLLAMA_NUM_GPU: 999 (use all GPU cores)"
+echo "- OLLAMA_NUM_CTX: 4096 (optimized for speed)"
+echo "- OLLAMA_NUM_GPU: 76 (M2 Ultra GPU cores)"
 echo ""
 echo "With 192GB RAM, you could also run:"
 echo "- llama3.1:70b (40GB)"

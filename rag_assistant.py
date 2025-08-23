@@ -50,7 +50,7 @@ Provide a clear, educational response with citations."""
         
         return prompt
     
-    def query(self, question: str, n_results: int = 5) -> Dict:
+    def query(self, question: str, n_results: int = 3) -> Dict:
         """Main query method"""
         
         # Search vector store
