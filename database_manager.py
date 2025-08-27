@@ -12,39 +12,65 @@ class DatabaseManager:
         self.vector_store = JapaneseVectorStore()
     
     def get_textbook_stats(self):
-        """Get statistics about textbooks in the database"""
+        """Get statistics about textbooks in the database - optimized for large datasets"""
         try:
-            all_docs = self.vector_store.collection.get(include=['metadatas', 'documents'])
-            metadatas = all_docs['metadatas']
-            documents = all_docs['documents']
+            # First, get only metadata for source counts (lightweight)
+            metadata_only = self.vector_store.collection.get(include=['metadatas'])
+            metadatas = metadata_only['metadatas']
             
             # Count by source
             sources = [meta.get('source', 'unknown') for meta in metadatas]
             source_counts = Counter(sources)
             
-            # Find REAL duplicates - identical text content that's likely from processing errors
-            # Not just repeated words/particles which are normal in language
-            real_duplicates = 0
-            text_counts = Counter(doc.strip() for doc in documents if doc.strip())
-            
-            # Only count as duplicates if:
-            # 1. Text is substantial (>10 characters)
-            # 2. Appears more than 2 times (very likely processing error)
-            # 3. Isn't common single words/particles
-            for text, count in text_counts.items():
-                if (len(text) > 10 and  # Substantial text
-                    count > 2 and       # Appears many times
-                    not self._is_common_element(text)):  # Not a common element
-                    real_duplicates += (count - 1)  # Count extras only
+            # For duplicate detection, use a lighter approach:
+            # Sample a subset of documents rather than loading all content
+            total_count = len(metadatas)
+            if total_count > 10000:  # For large datasets, sample only
+                sample_size = min(1000, total_count // 10)  # Sample 10% or max 1000
+                sample_docs = self.vector_store.collection.get(
+                    include=['documents'], 
+                    limit=sample_size
+                )
+                documents = sample_docs['documents']
+                estimated_duplicates = self._estimate_duplicates_from_sample(documents, total_count, sample_size)
+            else:
+                # For smaller datasets, check all documents
+                all_docs = self.vector_store.collection.get(include=['documents'])
+                documents = all_docs['documents']
+                estimated_duplicates = self._count_exact_duplicates(documents)
             
             return {
                 'total_documents': len(metadatas),
                 'textbooks': dict(source_counts),
-                'duplicates': real_duplicates,
+                'duplicates': estimated_duplicates,
                 'duplicate_examples': {}  # Don't show examples of legitimate repeated text
             }
         except Exception as e:
             return {'error': str(e)}
+    
+    def _count_exact_duplicates(self, documents):
+        """Count exact duplicates in document list"""
+        real_duplicates = 0
+        text_counts = Counter(doc.strip() for doc in documents if doc.strip())
+        
+        # Only count as duplicates if:
+        # 1. Text is substantial (>10 characters)  
+        # 2. Appears more than 2 times (very likely processing error)
+        # 3. Isn't common single words/particles
+        for text, count in text_counts.items():
+            if (len(text) > 10 and
+                count > 2 and
+                not self._is_common_element(text)):
+                real_duplicates += (count - 1)  # Count extras only
+        
+        return real_duplicates
+    
+    def _estimate_duplicates_from_sample(self, sample_documents, total_count, sample_size):
+        """Estimate duplicates from a sample"""
+        sample_duplicates = self._count_exact_duplicates(sample_documents)
+        # Simple linear extrapolation
+        estimated_total = int((sample_duplicates / sample_size) * total_count) if sample_size > 0 else 0
+        return estimated_total
     
     def _is_common_element(self, text):
         """Check if text is a common element that naturally repeats"""

@@ -99,6 +99,15 @@ Provide a clear, educational response with citations."""
         # Search vector store
         search_results = self.vector_store.search(question, n_results=n_results)
         
+        # Check for empty results
+        if not search_results['documents'] or not search_results['documents'][0]:
+            return {
+                'question': question,
+                'answer': "I couldn't find any relevant information in the database. Please make sure you've uploaded some documents first.",
+                'sources': [],
+                'confidence': 0.0
+            }
+        
         # Prepare context
         context = []
         for i in range(len(search_results['documents'][0])):
@@ -163,7 +172,7 @@ Provide a clear, educational response with citations."""
                 }
                 for ctx in context
             ],
-            'confidence': 1.0 - (sum(ctx['distance'] for ctx in context) / len(context))
+            'confidence': 1.0 - (sum(ctx['distance'] for ctx in context) / len(context)) if context else 0.0
         }
     
     def query_stream(self, question: str, n_results: int = 3, stop_event=None):
@@ -171,6 +180,16 @@ Provide a clear, educational response with citations."""
         
         # Search vector store
         search_results = self.vector_store.search(question, n_results=n_results)
+        
+        # Check for empty results
+        if not search_results['documents'] or not search_results['documents'][0]:
+            yield {
+                'token': "I couldn't find any relevant information in the database. Please make sure you've uploaded some documents first.",
+                'done': True,
+                'sources': [],
+                'type': 'answer'
+            }
+            return
         
         # Prepare context
         context = []

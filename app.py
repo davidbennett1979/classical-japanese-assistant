@@ -13,8 +13,9 @@ assistant = ClassicalJapaneseAssistant(vector_store)
 ocr = JapaneseOCR()
 db_manager = DatabaseManager()
 
-# Global stop flag for cancellation
-stop_generation = threading.Event()
+# Session-based stop events to prevent interference between users
+import uuid
+session_stop_events = {}
 
 # Load available prompts dynamically
 def get_available_prompts():
@@ -22,14 +23,33 @@ def get_available_prompts():
     prompt_files = glob.glob("prompts/*.md")
     return sorted(prompt_files) if prompt_files else ["prompts/classical_japanese_tutor.md"]
 
-def chat_function(message, history, show_thinking_enabled=True):
+def chat_function(message, history, show_thinking_enabled=True, session_id=None):
     """Main chat interface with streaming support - returns multiple outputs for different UI components"""
-    global stop_generation
-    stop_generation.clear()  # Reset stop flag
+    # Create or get session-specific stop event
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+    
+    if session_id not in session_stop_events:
+        session_stop_events[session_id] = threading.Event()
+    
+    stop_event = session_stop_events[session_id]
+    stop_event.clear()  # Reset stop flag
     
     
     history = history or []
     history.append({"role": "user", "content": message})
+    
+    # Check if a model is selected
+    if not assistant.model_name:
+        history.append({"role": "assistant", "content": "❌ No model selected. Please select a model in the Settings tab first."})
+        yield (
+            history,
+            gr.update(value="", visible=False),
+            gr.update(value=""),
+            gr.update(visible=False),
+            gr.update()
+        )
+        return
     
     try:
         # Initialize components
@@ -40,9 +60,9 @@ def chat_function(message, history, show_thinking_enabled=True):
         is_thinking_model = False
         
         # Stream the response
-        for chunk in assistant.query_stream(message, stop_event=stop_generation):
+        for chunk in assistant.query_stream(message, stop_event=stop_event):
             # Check if stop was requested
-            if stop_generation.is_set():
+            if stop_event.is_set():
                 if thinking_text:
                     thinking_text += "\n\n*[Generation stopped by user]*"
                 if answer_text:
@@ -88,6 +108,45 @@ def chat_function(message, history, show_thinking_enabled=True):
                 if is_thinking_model:
                     model_info += " 💭 *(Reasoning Model)*"
                 continue
+            
+            # Handle final chunk with sources (may not have token)
+            if chunk.get('done') and not sources_text and 'sources' in chunk:
+                sources_text = "\n\n**Sources:**\n"
+                for i, source in enumerate(chunk['sources']):
+                    source_text = source['metadata'].get('source', 'unknown')
+                    page = source['metadata'].get('page', 'N/A')
+                    sources_text += f"- [{i+1}] {source_text}, Page {page}\n"
+                
+                # Update final message with sources for both model types
+                if is_thinking_model and answer_text:
+                    # For thinking models, update the answer in chatbot with sources
+                    assistant_message = f"📝 **Response using {assistant.model_name}**\n\n{answer_text}{sources_text}"
+                    if len(history) > 1 and history[-1]["role"] == "assistant":
+                        history[-1]["content"] = assistant_message
+                    else:
+                        history.append({"role": "assistant", "content": assistant_message})
+                    
+                    thinking_display = thinking_text if show_thinking_enabled else f"*Thinking hidden ({len(thinking_text)} chars)*"
+                    yield (
+                        history,
+                        gr.update(value=model_info, visible=True),
+                        gr.update(value=thinking_display),
+                        gr.update(visible=bool(thinking_text)),
+                        gr.update()
+                    )
+                elif not is_thinking_model:
+                    # For non-thinking models, update with sources
+                    assistant_message = f"📝 **Response generated using {assistant.model_name}**\n\n{answer_text}{sources_text}"
+                    if len(history) > 1 and history[-1]["role"] == "assistant":
+                        history[-1]["content"] = assistant_message
+                    
+                    yield (
+                        history,
+                        gr.update(value="", visible=False),
+                        gr.update(value=""),
+                        gr.update(visible=False),
+                        gr.update()
+                    )
             
             # Update content based on chunk type
             if 'token' in chunk:
@@ -141,28 +200,6 @@ def chat_function(message, history, show_thinking_enabled=True):
                         gr.update()   # [4] show_thinking checkbox
                     )
                 
-                # Add sources when done
-                if chunk['done'] and not sources_text:
-                    sources_text = "\n\n**Sources:**\n"
-                    for i, source in enumerate(chunk['sources']):
-                        source_text = source['metadata'].get('source', 'unknown')
-                        page = source['metadata'].get('page', 'N/A')
-                        sources_text += f"- [{i+1}] {source_text}, Page {page}\n"
-                    
-                    # For NON-THINKING models: update final message with sources
-                    if not is_thinking_model:
-                        assistant_message = f"📝 **Response generated using {assistant.model_name}**\n\n{answer_text}{sources_text}"
-                        if len(history) > 1 and history[-1]["role"] == "assistant":
-                            history[-1]["content"] = assistant_message
-                        
-                        # Final update with sources
-                        yield (
-                            history,  # [0] chatbot - gets final message with sources
-                            gr.update(value="", visible=False),  # [1] model_display (hidden)
-                            gr.update(value=""),  # [2] thinking_content (empty)
-                            gr.update(visible=False),  # [3] thinking_accordion (hidden)
-                            gr.update()   # [4] show_thinking checkbox
-                        )
                 
     except Exception as e:
         history.append({"role": "assistant", "content": f"❌ Error: {str(e)}"})
@@ -218,28 +255,54 @@ def process_new_document(file):
             
             # Process with page-by-page updates
             processed_chunks = []
+            failed_pages = []
+            created_png_files = []  # Track files created by this job
             for i, image in enumerate(images, 1):
                 progress_pct = int((i / total_pages) * 100)
                 yield f"📄 Processing page {i}/{total_pages} ({progress_pct}%)..."
                 
-                # Save temporary image
-                page_path = f"processed_docs/page_{i:04d}.png"
-                image.save(page_path, 'PNG')
-                
-                # Extract text
-                text_data = ocr.extract_text_with_coordinates(page_path)
-                for item in text_data:
-                    item['source_pdf'] = os.path.basename(file.name)
-                    item['page_number'] = i
-                processed_chunks.extend(text_data)
+                try:
+                    # Save temporary image
+                    page_path = f"processed_docs/page_{i:04d}.png"
+                    image.save(page_path, 'PNG')
+                    created_png_files.append(page_path)  # Track this file
+                    
+                    # Extract text
+                    text_data = ocr.extract_text_with_coordinates(page_path)
+                    for item in text_data:
+                        item['source_pdf'] = os.path.basename(file.name)
+                        item['page_number'] = i
+                    processed_chunks.extend(text_data)
+                except Exception as page_error:
+                    failed_pages.append(i)
+                    print(f"Failed to process page {i}: {page_error}")
+                    continue
             
-            yield f"✅ OCR complete! Processed {len(processed_chunks):,} text chunks from {total_pages} pages"
+            if failed_pages and len(failed_pages) < total_pages:
+                yield f"⚠️ Warning: {len(failed_pages)} pages failed, but processed {total_pages - len(failed_pages)} successfully"
             
-        except Exception:
-            # Fallback to original method
-            yield f"📄 Processing PDF (using fallback method)..."
-            processed_chunks = ocr.process_pdf(file.name)
-            yield f"✅ OCR complete! Processing {len(processed_chunks):,} text chunks..."
+            yield f"✅ OCR complete! Processed {len(processed_chunks):,} text chunks from {total_pages - len(failed_pages)} pages"
+            
+        except Exception as pdf_error:
+            # If entire PDF fails, try a different approach with lower DPI
+            yield f"📄 PDF processing failed, trying with lower quality..."
+            created_png_files = []  # Initialize in case first try failed
+            try:
+                images = convert_from_path(file.name, 150)  # Lower DPI
+                processed_chunks = []
+                for i, image in enumerate(images, 1):
+                    page_path = f"processed_docs/page_{i:04d}.png"
+                    image.save(page_path, 'PNG')
+                    created_png_files.append(page_path)
+                    text_data = ocr.extract_text_with_coordinates(page_path)
+                    for item in text_data:
+                        item['source_pdf'] = os.path.basename(file.name)
+                        item['page_number'] = i
+                    processed_chunks.extend(text_data)
+                yield f"✅ OCR complete with fallback! Processed {len(processed_chunks):,} text chunks..."
+            except Exception:
+                yield f"❌ PDF processing failed completely. Error: {str(pdf_error)}"
+                return
         
         # Convert to vector store format
         chunks = []
@@ -256,6 +319,12 @@ def process_new_document(file):
         # Single image processing - needs chunking
         yield "🖼️ Processing image with OCR..."
         text_data = ocr.extract_text_with_coordinates(file.name)
+        
+        # Add metadata to text_data before chunking
+        for item in text_data:
+            item['source_pdf'] = os.path.basename(file.name)
+            item['page_number'] = 1
+        
         chunks = vector_store.chunk_text(text_data)
         yield f"✅ OCR complete! Processing {len(chunks):,} text chunks..."
     
@@ -278,16 +347,17 @@ def process_new_document(file):
         yield f"💾 Adding {total_chunks:,} chunks to vector database..."
         vector_store.add_documents(chunks)
     
-    # Clean up PNG files automatically
-    yield "🧹 Cleaning up temporary image files..."
-    png_files = glob.glob("processed_docs/*.png")
-    if png_files:
-        for png_file in png_files:
+    # Clean up only PNG files created by this job
+    if file.name.endswith('.pdf') and 'created_png_files' in locals() and created_png_files:
+        yield "🧹 Cleaning up temporary image files..."
+        removed_count = 0
+        for png_file in created_png_files:
             try:
                 os.remove(png_file)
+                removed_count += 1
             except:
                 pass  # Ignore errors
-        yield f"🧹 Removed {len(png_files)} temporary PNG files"
+        yield f"🧹 Removed {removed_count} temporary PNG files from this job"
     
     # Final success message
     final_count = vector_store.collection.count()
@@ -451,8 +521,9 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         
         # Stop button sets the stop flag and hides itself
         def stop_generation_handler():
-            global stop_generation
-            stop_generation.set()  # Signal to stop generation
+            # Stop all active sessions (simplified approach)
+            for stop_event in session_stop_events.values():
+                stop_event.set()
             return gr.update(visible=False)
         
         stop_btn.click(

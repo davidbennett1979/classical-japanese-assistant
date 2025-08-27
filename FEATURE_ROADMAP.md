@@ -3,7 +3,7 @@
 ## 🎯 Vision
 Transform this from a basic RAG assistant into the ultimate Classical Japanese learning platform - think "Duolingo meets Ancient Japan with AI superpowers"
 
-## ✅ Completed Features (Latest Update: 2024-01)
+## ✅ Completed Features (Latest Update: 2025-01)
 *These have been successfully implemented!*
 
 ### **Real-time Response Streaming** ⚡
@@ -25,6 +25,19 @@ Transform this from a basic RAG assistant into the ultimate Classical Japanese l
 - ✅ Simplified settings interface
 - ✅ Optimized component routing
 - **Status: COMPLETE** - Production-ready code
+
+### **Critical Bug Fixes** 🐛
+- ✅ **Missing streamed citations**: Sources now properly appear in final responses
+- ✅ **Division by zero protection**: Guards added for empty search results
+- ✅ **Empty database handling**: Graceful messages when no documents indexed
+- ✅ **Model selection guard**: Clear error when no model selected
+- ✅ **Image metadata fix**: Uploaded images get proper source/page information
+- ✅ **OCR crash protection**: Blank images no longer crash deskew process
+- ✅ **Session isolation**: Stop button races between users eliminated
+- ✅ **OCR fallback robustness**: Page-level error handling with quality fallbacks
+- ✅ **Performance optimization**: Database stats queries optimized for large datasets
+- ✅ **Cleanup precision**: Only deletes PNG files created by current job
+- **Status: COMPLETE** - 10 critical issues resolved across stability, safety, and performance
 
 ## Priority 1: Core Learning Enhancements 🔥
 *These directly improve your learning experience*

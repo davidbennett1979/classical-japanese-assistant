@@ -22,8 +22,11 @@ class JapaneseOCR:
         # Denoise
         denoised = cv2.medianBlur(binary, 3)
         
-        # Deskew
+        # Deskew - guard against empty coords
         coords = np.column_stack(np.where(denoised > 0))
+        if coords.size == 0:
+            # No text pixels found, skip deskewing
+            return denoised
         angle = cv2.minAreaRect(coords)[-1]
         if angle < -45:
             angle = 90 + angle

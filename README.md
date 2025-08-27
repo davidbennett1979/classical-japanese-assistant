@@ -13,6 +13,7 @@ A RAG (Retrieval-Augmented Generation) powered application for studying Classica
 - 🎯 **Grammar Search**: Dedicated interface for exploring specific grammar points
 - 📖 **Source Citations**: All answers include page references from your materials
 - 🔄 **Model Switching**: Seamlessly switch between different Ollama models from the settings tab
+- 🛡️ **Production Ready**: Robust error handling, session isolation, and performance optimizations
 
 ## Architecture Overview
 
