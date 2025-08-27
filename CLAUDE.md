@@ -4,6 +4,7 @@ For this classical-japanese-assistant app, we are using python3 in a venv virtua
 
 # General Coding Style & Philosophy
 
+- Everything we create should be modular and created in a way that can be both scalable and portable. Avoid hard coding variables, features, model names etc whereever possible.
 - Favor readability and simplicity over cleverness.
 - Write code as if someone else will read it tomorrow.
 - Prioritize maintainability and clear commenting.

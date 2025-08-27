@@ -7,9 +7,12 @@ A RAG (Retrieval-Augmented Generation) powered application for studying Classica
 - 📚 **PDF/Image OCR**: Automatically extract Japanese text from scanned textbooks
 - 🔍 **Semantic Search**: Find relevant information from your textbooks using natural language queries
 - 💬 **AI Chat Interface**: Ask questions about grammar, vocabulary, and get explanations with citations
+- ⚡ **Real-time Streaming**: Watch responses generate in real-time with token-by-token streaming
+- 🧠 **Thinking Mode Support**: For reasoning models (qwen3, deepseek-r1), see the AI's thought process in a collapsible accordion while the answer streams separately
 - 📝 **Personal Notes**: Add and search through your own study notes
 - 🎯 **Grammar Search**: Dedicated interface for exploring specific grammar points
 - 📖 **Source Citations**: All answers include page references from your materials
+- 🔄 **Model Switching**: Seamlessly switch between different Ollama models from the settings tab
 
 ## Architecture Overview
 
@@ -30,9 +33,11 @@ A RAG (Retrieval-Augmented Generation) powered application for studying Classica
    - Stores document metadata (source, page numbers)
 
 4. **`rag_assistant.py`** - AI assistant logic
-   - Interfaces with Ollama for LLM inference
+   - Interfaces with Ollama for LLM inference with streaming support
    - Creates prompts with retrieved context
+   - Implements tag-aware parsing for thinking models (`<think>` tags)
    - Formats responses with citations
+   - Automatically detects and handles reasoning/thinking models
 
 5. **`optimize.py`** - Mac-specific optimizations
    - Configures Metal acceleration

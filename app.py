@@ -3,9 +3,9 @@ from rag_assistant import ClassicalJapaneseAssistant
 from vector_store import JapaneseVectorStore
 from ocr_pipeline import JapaneseOCR
 from database_manager import DatabaseManager
-import json
 import os
 import glob
+import threading
 
 # Initialize components
 vector_store = JapaneseVectorStore()
@@ -13,26 +13,190 @@ assistant = ClassicalJapaneseAssistant(vector_store)
 ocr = JapaneseOCR()
 db_manager = DatabaseManager()
 
+# Global stop flag for cancellation
+stop_generation = threading.Event()
+
 # Load available prompts dynamically
 def get_available_prompts():
     """Dynamically load all .md files from prompts folder"""
     prompt_files = glob.glob("prompts/*.md")
     return sorted(prompt_files) if prompt_files else ["prompts/classical_japanese_tutor.md"]
 
-def chat_function(message, history):
-    """Main chat interface"""
-    result = assistant.query(message)
+def chat_function(message, history, show_thinking_enabled=True):
+    """Main chat interface with streaming support - returns multiple outputs for different UI components"""
+    global stop_generation
+    stop_generation.clear()  # Reset stop flag
     
-    # Format response with citations
-    response = result['answer'] + "\n\n**Sources:**\n"
-    for i, source in enumerate(result['sources']):
-        response += f"- [{i+1}] {source['source']}, Page {source['page']}\n"
     
-    # Return in the correct format for Gradio Chatbot messages format
     history = history or []
     history.append({"role": "user", "content": message})
-    history.append({"role": "assistant", "content": response})
-    return history
+    
+    try:
+        # Initialize components
+        model_info = ""
+        thinking_text = ""
+        answer_text = ""
+        sources_text = ""
+        is_thinking_model = False
+        
+        # Stream the response
+        for chunk in assistant.query_stream(message, stop_event=stop_generation):
+            # Check if stop was requested
+            if stop_generation.is_set():
+                if thinking_text:
+                    thinking_text += "\n\n*[Generation stopped by user]*"
+                if answer_text:
+                    answer_text += "\n\n*[Generation stopped by user]*"
+                else:
+                    answer_text = "*[Generation stopped by user]*"
+                
+                # For thinking models, add to history only at the end
+                if is_thinking_model:
+                    if len(history) > 1 and history[-1]["role"] == "assistant":
+                        history[-1]["content"] = f"📝 Response stopped - using {assistant.model_name}"
+                    else:
+                        history.append({"role": "assistant", "content": f"📝 Response stopped - using {assistant.model_name}"})
+                
+                # DISABLED: This was conflicting with our simplified test
+                # Return final states
+                # yield (
+                #     history,  # chatbot
+                #     gr.update(value=f"🤖 **Model:** {assistant.model_name}", visible=is_thinking_model),  # model_display  
+                #     gr.update(value=thinking_text if show_thinking_enabled else "Thinking hidden"),  # thinking_content
+                #     gr.update(value=answer_text + sources_text, visible=is_thinking_model),  # answer_section
+                #     gr.update(visible=is_thinking_model),  # thinking_accordion
+                #     gr.update()   # show_thinking checkbox - always visible
+                # )
+                return
+                
+            if 'error' in chunk:
+                history.append({"role": "assistant", "content": f"❌ Error: {chunk['error']}"})
+                yield (
+                    history,
+                    gr.update(value="", visible=False),
+                    gr.update(value=""),
+                    gr.update(value="", visible=False),
+                    gr.update(visible=False),
+                    gr.update()  # show_thinking checkbox - always visible
+                )
+                return
+            
+            # Handle model info
+            if chunk.get('type') == 'model_info':
+                model_info = f"🤖 **Model:** {chunk['model_name']}"
+                is_thinking_model = chunk.get('is_thinking_model', False)
+                if is_thinking_model:
+                    model_info += " 💭 *(Reasoning Model)*"
+                continue
+            
+            # Update content based on chunk type
+            if 'token' in chunk:
+                # Route tokens based on model type and chunk type
+                if is_thinking_model:
+                    # THINKING MODELS: Route based on chunk type
+                    if chunk.get('type') == 'thinking':
+                        thinking_text += chunk['token']
+                        # Update thinking accordion in real-time
+                        thinking_display = thinking_text if show_thinking_enabled else f"*Thinking hidden ({len(thinking_text)} chars)*"
+                        yield (
+                            history,  # [0] chatbot - no change during thinking
+                            gr.update(value=model_info, visible=True),  # [1] model_display
+                            gr.update(value=thinking_display),  # [2] thinking_content - show thinking in accordion
+                            gr.update(visible=True),  # [3] thinking_accordion - visible
+                            gr.update()   # [4] show_thinking checkbox
+                        )
+                    elif chunk.get('type') == 'answer':
+                        answer_text += chunk['token']
+                        # Stream answer to chatbot in real-time
+                        assistant_message = f"📝 **Response using {assistant.model_name}**\n\n{answer_text}"
+                        if len(history) > 1 and history[-1]["role"] == "assistant":
+                            history[-1]["content"] = assistant_message
+                        else:
+                            history.append({"role": "assistant", "content": assistant_message})
+                        
+                        # Update chatbot with streaming answer, keep thinking accordion visible
+                        thinking_display = thinking_text if show_thinking_enabled else f"*Thinking hidden ({len(thinking_text)} chars)*"
+                        yield (
+                            history,  # [0] chatbot - gets streaming answer
+                            gr.update(value=model_info, visible=True),  # [1] model_display
+                            gr.update(value=thinking_display),  # [2] thinking_content - keep thinking content
+                            gr.update(visible=bool(thinking_text)),  # [3] thinking_accordion - visible if thinking exists
+                            gr.update()   # [4] show_thinking checkbox
+                        )
+                else:
+                    # NON-THINKING MODELS: Stream everything as answer to chatbot
+                    answer_text += chunk['token']
+                    assistant_message = f"📝 **Response generated using {assistant.model_name}**\n\n{answer_text}"
+                    if len(history) > 1 and history[-1]["role"] == "assistant":
+                        history[-1]["content"] = assistant_message
+                    else:
+                        history.append({"role": "assistant", "content": assistant_message})
+                    
+                    # Stream to chatbot, hide thinking components
+                    yield (
+                        history,  # [0] chatbot - gets real-time streaming
+                        gr.update(value="", visible=False),  # [1] model_display (hidden)
+                        gr.update(value=""),  # [2] thinking_content (empty)
+                        gr.update(visible=False),  # [3] thinking_accordion (hidden)
+                        gr.update()   # [4] show_thinking checkbox
+                    )
+                
+                # Add sources when done
+                if chunk['done'] and not sources_text:
+                    sources_text = "\n\n**Sources:**\n"
+                    for i, source in enumerate(chunk['sources']):
+                        source_text = source['metadata'].get('source', 'unknown')
+                        page = source['metadata'].get('page', 'N/A')
+                        sources_text += f"- [{i+1}] {source_text}, Page {page}\n"
+                    
+                    # For NON-THINKING models: update final message with sources
+                    if not is_thinking_model:
+                        assistant_message = f"📝 **Response generated using {assistant.model_name}**\n\n{answer_text}{sources_text}"
+                        if len(history) > 1 and history[-1]["role"] == "assistant":
+                            history[-1]["content"] = assistant_message
+                        
+                        # Final update with sources
+                        yield (
+                            history,  # [0] chatbot - gets final message with sources
+                            gr.update(value="", visible=False),  # [1] model_display (hidden)
+                            gr.update(value=""),  # [2] thinking_content (empty)
+                            gr.update(visible=False),  # [3] thinking_accordion (hidden)
+                            gr.update()   # [4] show_thinking checkbox
+                        )
+                
+    except Exception as e:
+        history.append({"role": "assistant", "content": f"❌ Error: {str(e)}"})
+        # ERROR: Use new 5-component format
+        yield (
+            history,  # [0] chatbot
+            gr.update(value="", visible=False),  # [1] model_display
+            gr.update(value=""),  # [2] thinking_content
+            gr.update(visible=False),  # [3] thinking_accordion
+            gr.update()  # [4] show_thinking checkbox
+        )
+
+def chat_function_non_streaming(message, history):
+    """Fallback non-streaming chat for compatibility"""
+    try:
+        result = assistant.query(message)
+        
+        # Format response with citations
+        response = result['answer'] + "\n\n**Sources:**\n"
+        for i, source in enumerate(result['sources']):
+            response += f"- [{i+1}] {source['source']}, Page {source['page']}\n"
+        
+        # Return in the correct format for Gradio Chatbot messages format
+        history = history or []
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": response})
+        return history
+        
+    except Exception as e:
+        # Return error message in chat format
+        history = history or []
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": f"❌ Error: {str(e)}\n\nPlease try again or check the model settings."})
+        return history
 
 def add_note_function(note_text, topic):
     """Add personal note"""
@@ -71,7 +235,7 @@ def process_new_document(file):
             
             yield f"✅ OCR complete! Processed {len(processed_chunks):,} text chunks from {total_pages} pages"
             
-        except Exception as e:
+        except Exception:
             # Fallback to original method
             yield f"📄 Processing PDF (using fallback method)..."
             processed_chunks = ocr.process_pdf(file.name)
@@ -212,18 +376,104 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
     gr.Markdown("Powered by local AI with your textbook knowledge")
     
     with gr.Tab("Chat"):
-        chatbot = gr.Chatbot(height=500, elem_id="main-chatbot", show_copy_button=True, type="messages")
+        # Model and thinking display info
+        model_display = gr.Markdown("", visible=False)
+        
+        # FIXED: Move thinking_content INSIDE accordion where it belongs
+        thinking_accordion = gr.Accordion(
+            "🧠 Thinking Process", 
+            open=True, 
+            visible=True  # TEMPORARY: Always visible for testing
+        )
+        with thinking_accordion:
+            thinking_content = gr.Markdown("", elem_id="thinking-content")
+        
+        # Answer section for thinking models - COMPLETELY DISABLED for testing
+        # answer_section = gr.Markdown("", visible=False, label="Answer")
+        
+        # Regular chatbot for non-thinking models and conversation history
+        chatbot = gr.Chatbot(
+            height=400, 
+            elem_id="main-chatbot", 
+            show_copy_button=True, 
+            type="messages",
+            label="Conversation"
+        )
+        
         msg = gr.Textbox(
             label="Ask a question",
             placeholder="E.g., 'Explain the べし auxiliary verb' or 'What are the uses of particle ぞ?'",
             elem_id="chat-input"
         )
-        clear = gr.Button("Clear", variant="secondary")
+        with gr.Row():
+            submit_btn = gr.Button("Send", variant="primary")
+            stop_btn = gr.Button("Stop", variant="stop", visible=False)
+            clear_btn = gr.Button("Clear", variant="secondary")
         
-        msg.submit(chat_function, [msg, chatbot], [chatbot], show_progress="minimal").then(
-            lambda: "", None, msg  # Clear the input after sending
+        with gr.Row():
+            with gr.Column(scale=1):
+                show_thinking = gr.Checkbox(
+                    label="Show Thinking Process", 
+                    value=True,
+                    info="Display reasoning steps for thinking models",
+                    visible=True  # Always visible
+                )
+        
+        # Handle streaming with proper UI updates
+        # FIXED: Match your targeted behavior - no answer_section
+        outputs = [chatbot, model_display, thinking_content, thinking_accordion, show_thinking]
+        
+        submit_event = msg.submit(
+            chat_function, 
+            [msg, chatbot, show_thinking], 
+            outputs,
+            show_progress="minimal"
+        ).then(
+            lambda: gr.update(visible=False), None, stop_btn
+        ).then(
+            lambda: "", None, msg  # Clear input after sending
         )
-        clear.click(lambda: [], None, chatbot, queue=False)
+        
+        click_event = submit_btn.click(
+            chat_function,
+            [msg, chatbot, show_thinking],
+            outputs,
+            show_progress="minimal"
+        ).then(
+            lambda: gr.update(visible=False), None, stop_btn
+        ).then(
+            lambda: "", None, msg  # Clear input after sending
+        )
+        
+        # Show stop button during generation
+        msg.submit(lambda: gr.update(visible=True), None, stop_btn, queue=False)
+        submit_btn.click(lambda: gr.update(visible=True), None, stop_btn, queue=False)
+        
+        # Stop button sets the stop flag and hides itself
+        def stop_generation_handler():
+            global stop_generation
+            stop_generation.set()  # Signal to stop generation
+            return gr.update(visible=False)
+        
+        stop_btn.click(
+            stop_generation_handler,
+            None,
+            stop_btn,
+            queue=False
+        )
+        
+        # Clear function for all components
+        def clear_all():
+            return (
+                [],  # chatbot
+                gr.update(value="", visible=False),  # model_display
+                gr.update(value=""),  # thinking_content
+                gr.update(value="", visible=False),  # answer_section
+                gr.update(visible=False),  # thinking_accordion
+                gr.update()   # show_thinking checkbox - always visible, don't change
+            )
+        
+        clear_btn.click(clear_all, None, outputs, queue=False)
     
     with gr.Tab("Add Notes"):
         note_input = gr.Textbox(
@@ -453,16 +703,6 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         model_status = gr.Textbox(label="Model Status", interactive=False, value=f"Current: {assistant.model_name}")
         model_dropdown.change(switch_model, model_dropdown, model_status)
         
-        gr.Markdown("""#### 📦 Recommended Models for Your System (192GB RAM):
-        - **qwen2.5:72b** (47GB) - Current, excellent for Japanese
-        - **llama3.1:70b** (40GB) - Very strong general model
-        - **command-r:35b** (20GB) - Good for RAG tasks
-        - **deepseek-coder-v2:16b** (9GB) - If analyzing code
-        - **mixtral:8x7b** (26GB) - Fast, good quality
-        
-        To install: `ollama pull model_name`
-        """)
-        
         gr.Markdown("### Prompt Settings")
         gr.Markdown("Configure which prompts to use for each section:")
         
@@ -538,5 +778,6 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
 
 # Launch the app
 if __name__ == "__main__":
+    app.queue()  # Enable queuing for streaming
     app.launch(server_name="0.0.0.0", server_port=7860, share=False)
 
