@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Stop the classical-japanese-assistant app gracefully
-PID=$(pgrep -f "python app.py")
+PID=$(pgrep -f "app.py")
 
 if [ -n "$PID" ]; then
     echo "Stopping Classical Japanese Assistant (PID: $PID)..."

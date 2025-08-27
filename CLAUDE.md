@@ -1,6 +1,6 @@
 # APP Specific
 
-For this classical-japanese-assistant app, we are using python3 in a venv virtual environment. We start the process with run.sh
+For this classical-japanese-assistant app, we are using python3 in a venv virtual environment. We start the process with start.sh
 
 # General Coding Style & Philosophy
 

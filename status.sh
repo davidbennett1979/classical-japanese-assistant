@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Check if the classical-japanese-assistant app is running
-PID=$(pgrep -f "python app.py")
+PID=$(pgrep -f "app.py")
 
 if [ -n "$PID" ]; then
     echo "Classical Japanese Assistant is running (PID: $PID)"
