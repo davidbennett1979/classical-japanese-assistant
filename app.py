@@ -6,6 +6,8 @@ from database_manager import DatabaseManager
 import os
 import glob
 import threading
+import logging
+from config import settings
 
 # Initialize components
 vector_store = JapaneseVectorStore()
@@ -157,11 +159,12 @@ def chat_function(message, history, show_thinking_enabled=True, session_id=None)
                         thinking_text += chunk['token']
                         # Update thinking accordion in real-time
                         thinking_display = thinking_text if show_thinking_enabled else f"*Thinking hidden ({len(thinking_text)} chars)*"
+                        thinking_visible = bool(thinking_text) and bool(show_thinking_enabled)
                         yield (
                             history,  # [0] chatbot - no change during thinking
                             gr.update(value=model_info, visible=True),  # [1] model_display
                             gr.update(value=thinking_display),  # [2] thinking_content - show thinking in accordion
-                            gr.update(visible=True),  # [3] thinking_accordion - visible
+                            gr.update(visible=thinking_visible),  # [3] thinking_accordion - visible
                             gr.update()   # [4] show_thinking checkbox
                         )
                     elif chunk.get('type') == 'answer':
@@ -175,11 +178,12 @@ def chat_function(message, history, show_thinking_enabled=True, session_id=None)
                         
                         # Update chatbot with streaming answer, keep thinking accordion visible
                         thinking_display = thinking_text if show_thinking_enabled else f"*Thinking hidden ({len(thinking_text)} chars)*"
+                        thinking_visible = bool(thinking_text) and bool(show_thinking_enabled)
                         yield (
                             history,  # [0] chatbot - gets streaming answer
                             gr.update(value=model_info, visible=True),  # [1] model_display
                             gr.update(value=thinking_display),  # [2] thinking_content - keep thinking content
-                            gr.update(visible=bool(thinking_text)),  # [3] thinking_accordion - visible if thinking exists
+                            gr.update(visible=thinking_visible),  # [3] thinking_accordion - visible if thinking exists and allowed
                             gr.update()   # [4] show_thinking checkbox
                         )
                 else:
@@ -275,7 +279,7 @@ def process_new_document(file):
                     processed_chunks.extend(text_data)
                 except Exception as page_error:
                     failed_pages.append(i)
-                    print(f"Failed to process page {i}: {page_error}")
+                    logging.getLogger(__name__).warning(f"Failed to process page {i}: {page_error}")
                     continue
             
             if failed_pages and len(failed_pages) < total_pages:
@@ -304,17 +308,8 @@ def process_new_document(file):
                 yield f"❌ PDF processing failed completely. Error: {str(pdf_error)}"
                 return
         
-        # Convert to vector store format
-        chunks = []
-        for chunk in processed_chunks:
-            chunks.append({
-                'text': chunk.get('text', ''),
-                'metadata': {
-                    'page': chunk.get('page_number', 0),
-                    'source': chunk.get('source_pdf', 'unknown'),
-                    'type': chunk.get('type', 'text')
-                }
-            })
+        # Convert to vector store format using chunker for consistency
+        chunks = vector_store.chunk_text(processed_chunks)
     else:
         # Single image processing - needs chunking
         yield "🖼️ Processing image with OCR..."
@@ -452,8 +447,8 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         # FIXED: Move thinking_content INSIDE accordion where it belongs
         thinking_accordion = gr.Accordion(
             "🧠 Thinking Process", 
-            open=True, 
-            visible=True  # TEMPORARY: Always visible for testing
+            open=False,
+            visible=False
         )
         with thinking_accordion:
             thinking_content = gr.Markdown("", elem_id="thinking-content")
@@ -492,10 +487,13 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         # Handle streaming with proper UI updates
         # FIXED: Match your targeted behavior - no answer_section
         outputs = [chatbot, model_display, thinking_content, thinking_accordion, show_thinking]
+
+        # Per-user session state for precise stop control
+        session_id_state = gr.State(str(uuid.uuid4()))
         
         submit_event = msg.submit(
             chat_function, 
-            [msg, chatbot, show_thinking], 
+            [msg, chatbot, show_thinking, session_id_state], 
             outputs,
             show_progress="minimal"
         ).then(
@@ -506,7 +504,7 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         
         click_event = submit_btn.click(
             chat_function,
-            [msg, chatbot, show_thinking],
+            [msg, chatbot, show_thinking, session_id_state],
             outputs,
             show_progress="minimal"
         ).then(
@@ -520,28 +518,29 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         submit_btn.click(lambda: gr.update(visible=True), None, stop_btn, queue=False)
         
         # Stop button sets the stop flag and hides itself
-        def stop_generation_handler():
-            # Stop all active sessions (simplified approach)
-            for stop_event in session_stop_events.values():
+        def stop_generation_handler(current_session_id):
+            # Stop only the current session
+            stop_event = session_stop_events.get(current_session_id)
+            if stop_event:
                 stop_event.set()
             return gr.update(visible=False)
         
         stop_btn.click(
             stop_generation_handler,
-            None,
-            stop_btn,
+            inputs=[session_id_state],
+            outputs=[stop_btn],
             queue=False
         )
         
         # Clear function for all components
         def clear_all():
+            # Reset to initial 5-component state (no answer_section used)
             return (
                 [],  # chatbot
                 gr.update(value="", visible=False),  # model_display
                 gr.update(value=""),  # thinking_content
-                gr.update(value="", visible=False),  # answer_section
                 gr.update(visible=False),  # thinking_accordion
-                gr.update()   # show_thinking checkbox - always visible, don't change
+                gr.update()   # show_thinking checkbox - leave as-is
             )
         
         clear_btn.click(clear_all, None, outputs, queue=False)
@@ -741,7 +740,7 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
                         return models if models else []
                 return []
             except Exception as e:
-                print(f"Error getting models: {e}")
+                logging.getLogger(__name__).warning(f"Error getting models: {e}")
                 return []
         
         # Get installed models on startup
@@ -749,7 +748,7 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         
         # Set initial model - use current model or first available
         if not installed_models:
-            print("Warning: No Ollama models found. Please install at least one model.")
+            logging.getLogger(__name__).warning("No Ollama models found. Please install at least one model.")
             current_model = assistant.model_name
         else:
             # Check if current model is in the list, otherwise use first available
@@ -758,7 +757,7 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
             else:
                 current_model = installed_models[0]
                 assistant.model_name = current_model  # Update assistant with first available model
-                print(f"Switched to available model: {current_model}")
+                logging.getLogger(__name__).info(f"Switched to available model: {current_model}")
         
         model_dropdown = gr.Dropdown(
             choices=installed_models,
@@ -850,5 +849,5 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
 # Launch the app
 if __name__ == "__main__":
     app.queue()  # Enable queuing for streaming
-    app.launch(server_name="0.0.0.0", server_port=7860, share=False)
-
+    # Bind host/port from settings with a safer default host
+    app.launch(server_name=settings.gradio_host, server_port=settings.gradio_port, share=False)

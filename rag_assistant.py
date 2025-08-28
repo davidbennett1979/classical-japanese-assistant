@@ -3,6 +3,8 @@ import json
 import os
 import subprocess
 from typing import List, Dict
+import logging
+from config import settings
 
 class ClassicalJapaneseAssistant:
     def __init__(self, vector_store, model_name=None, prompt_file="prompts/classical_japanese_tutor.md"):
@@ -17,7 +19,8 @@ class ClassicalJapaneseAssistant:
                 print("Warning: No Ollama models detected. Please install a model.")
         
         self.model_name = model_name
-        self.ollama_url = "http://localhost:11434/api/generate"
+        self.ollama_url = settings.ollama_url
+        self.session = requests.Session()
         self.prompt_template = self.load_prompt_template(prompt_file)
         
         # Thinking models configuration
@@ -50,7 +53,7 @@ class ClassicalJapaneseAssistant:
                         model_name = first_line.split()[0]
                         return model_name
         except Exception as e:
-            print(f"Error detecting Ollama models: {e}")
+            logging.getLogger(__name__).warning(f"Error detecting Ollama models: {e}")
         return None
     
     def load_prompt_template(self, prompt_file: str) -> str:
@@ -133,7 +136,7 @@ Provide a clear, educational response with citations."""
         
         # Call Ollama
         try:
-            response = requests.post(self.ollama_url, json={
+            response = self.session.post(self.ollama_url, json={
                 'model': self.model_name,
                 'prompt': prompt,
                 'stream': False,
@@ -226,7 +229,7 @@ Provide a clear, educational response with citations."""
         
         try:
             # Make streaming request
-            response = requests.post(self.ollama_url, json={
+            response = self.session.post(self.ollama_url, json={
                 'model': self.model_name,
                 'prompt': prompt,
                 'stream': True,  # Enable streaming
@@ -418,4 +421,3 @@ Provide a clear, educational response with citations."""
 # assistant = ClassicalJapaneseAssistant(vector_store)
 # result = assistant.query("What is the difference between ぞ and こそ particles?")
 # print(result['answer'])
-

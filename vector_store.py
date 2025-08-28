@@ -5,15 +5,20 @@ import json
 import os
 from typing import List, Dict
 import hashlib
+import logging
+from config import settings
 
 class JapaneseVectorStore:
-    def __init__(self, persist_directory="./chroma_db"):
+    def __init__(self, persist_directory: str | None = None):
         # Initialize embedding model - excellent for Japanese
-        self.embedder = SentenceTransformer('intfloat/multilingual-e5-large')
-        
+        model_name = settings.embedding_model
+        self.embedder = SentenceTransformer(model_name)
+        logging.getLogger(__name__).info(f"Loaded embedding model: {model_name}")
+
         # Initialize ChromaDB with persistence
+        db_path = persist_directory or settings.chroma_dir
         self.client = chromadb.PersistentClient(
-            path=persist_directory,
+            path=db_path,
             settings=Settings(
                 anonymized_telemetry=False,
                 allow_reset=True
@@ -85,26 +90,42 @@ class JapaneseVectorStore:
         
         texts = [doc['text'] for doc in documents]
         metadatas = [doc['metadata'] for doc in documents]
-        
-        # Generate unique IDs using text content + metadata for uniqueness
-        ids = []
-        for i, (text, metadata) in enumerate(zip(texts, metadatas)):
-            # Include metadata info to ensure uniqueness
-            unique_string = f"{text}_{metadata.get('page', '')}_{metadata.get('source', '')}_{i}"
-            ids.append(hashlib.md5(unique_string.encode()).hexdigest())
-        
-        # Generate embeddings
-        embeddings = self.embedder.encode(texts).tolist()
-        
-        # Add to ChromaDB
-        self.collection.add(
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=metadatas,
-            ids=ids
-        )
-        
-        print(f"Added {len(documents)} documents to vector store")
+
+        # Generate stable IDs using content + key metadata
+        ids: list[str] = []
+        seen: dict[str, int] = {}
+        for text, metadata in zip(texts, metadatas):
+            base = f"{text}_{metadata.get('page', '')}_{metadata.get('source', '')}"
+            base_hash = hashlib.md5(base.encode()).hexdigest()
+            if base_hash in seen:
+                seen[base_hash] += 1
+                uid = f"{base_hash}-{seen[base_hash]}"
+            else:
+                seen[base_hash] = 0
+                uid = base_hash
+            ids.append(uid)
+
+        # Batch embeddings to reduce memory pressure
+        batch_size = max(1, int(settings.embed_batch_size))
+        logger = logging.getLogger(__name__)
+        total = len(texts)
+        for start in range(0, total, batch_size):
+            end = min(start + batch_size, total)
+            batch_texts = texts[start:end]
+            batch_metas = metadatas[start:end]
+            batch_ids = ids[start:end]
+            try:
+                embeddings = self.embedder.encode(batch_texts).tolist()
+                self.collection.add(
+                    documents=batch_texts,
+                    embeddings=embeddings,
+                    metadatas=batch_metas,
+                    ids=batch_ids,
+                )
+            except Exception as e:
+                logger.error(f"Failed to add batch {start}-{end}: {e}")
+                raise
+        logging.getLogger(__name__).info(f"Added {len(documents)} documents to vector store")
     
     def search(self, query: str, n_results: int = 5):
         """Search for relevant passages"""
@@ -147,4 +168,3 @@ class JapaneseVectorStore:
 #     "The particle ぞ is emphatic and often appears in classical poetry",
 #     related_topic="particles"
 # )
-

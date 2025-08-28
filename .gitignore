@@ -7,36 +7,17 @@ __pycache__/
 venv/
 env/
 ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*.swn
 .DS_Store
-Thumbs.db
 
 # Application specific
 chroma_db/
-processed_docs/*.png
-processed_docs/*.jpg
-processed_docs/*.jpeg
+processed_docs/
 *.db
 *.sqlite
 
@@ -44,53 +25,11 @@ processed_docs/*.jpeg
 models/
 *.gguf
 *.bin
-*.pth
-*.safetensors
 
 # Logs
 *.log
 logs/
-*.out
-*.err
 
 # Temporary files
 tmp/
 temp/
-*.tmp
-*.bak
-*.backup
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Test coverage
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
-
-# Jupyter Notebooks
-.ipynb_checkpoints/
-*.ipynb
-
-# MacOS
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon
-._*
-
-# PDF and image test files (may contain copyrighted content)
-*.pdf
-*.jpg
-*.jpeg
-*.png
-*.gif
-!docs/*.png  # Allow documentation images
-
-# OCR output
-ocr_output/
-extracted_text/

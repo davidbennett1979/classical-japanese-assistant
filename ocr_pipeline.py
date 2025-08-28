@@ -5,6 +5,8 @@ from pdf2image import convert_from_path
 from PIL import Image
 import os
 import json
+import logging
+from config import settings
 
 class JapaneseOCR:
     def __init__(self, output_dir="./processed_docs"):
@@ -25,8 +27,8 @@ class JapaneseOCR:
         # Deskew - guard against empty coords
         coords = np.column_stack(np.where(denoised > 0))
         if coords.size == 0:
-            # No text pixels found, skip deskewing
-            return denoised
+            # No text pixels found, skip deskewing but return PIL Image for consistency
+            return Image.fromarray(denoised)
         angle = cv2.minAreaRect(coords)[-1]
         if angle < -45:
             angle = 90 + angle
@@ -43,8 +45,8 @@ class JapaneseOCR:
         image = Image.open(image_path)
         processed = self.preprocess_image(image)
         
-        # Use both Japanese and English OCR
-        custom_config = r'--oem 3 --psm 6 -l jpn+eng'
+        # Use languages and PSM from settings
+        custom_config = rf"--oem 3 --psm {settings.ocr_psm} -l {settings.ocr_langs}"
         
         # Get detailed OCR data
         data = pytesseract.image_to_data(processed, config=custom_config, 
@@ -85,7 +87,7 @@ class JapaneseOCR:
     
     def process_pdf(self, pdf_path, start_page=None, end_page=None):
         """Convert PDF to images and extract text"""
-        print(f"Processing PDF: {pdf_path}")
+        logging.getLogger(__name__).info(f"Processing PDF: {pdf_path}")
         
         # Convert PDF to images
         images = convert_from_path(pdf_path, 300, first_page=start_page, 
@@ -98,7 +100,7 @@ class JapaneseOCR:
             image_path = os.path.join(self.output_dir, f"page_{page_num:04d}.png")
             image.save(image_path, 'PNG')
             
-            print(f"Processing page {page_num}...")
+            logging.getLogger(__name__).info(f"Processing page {page_num}...")
             text_data = self.extract_text_with_coordinates(image_path)
             
             for item in text_data:
@@ -113,7 +115,7 @@ class JapaneseOCR:
         with open(output_json, 'w', encoding='utf-8') as f:
             json.dump(all_text_data, f, ensure_ascii=False, indent=2)
         
-        print(f"Saved structured text to {output_json}")
+        logging.getLogger(__name__).info(f"Saved structured text to {output_json}")
         return all_text_data
 
 # Usage
@@ -122,4 +124,3 @@ class JapaneseOCR:
 # text_data = ocr.process_pdf("your_textbook.pdf")
 # # For individual images
 # text_data = ocr.extract_text_with_coordinates("page_scan.jpg")
-

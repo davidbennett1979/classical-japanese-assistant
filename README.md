@@ -40,9 +40,9 @@ A RAG (Retrieval-Augmented Generation) powered application for studying Classica
    - Formats responses with citations
    - Automatically detects and handles reasoning/thinking models
 
-5. **`optimize.py`** - Mac-specific optimizations
-   - Configures Metal acceleration
-   - Optimizes Ollama settings for Apple Silicon
+5. **`optimize_ollama.sh`** - macOS optimizations
+   - Sets helpful Ollama env vars via `launchctl`
+   - Safe no-op on non-macOS systems
 
 ## Prerequisites
 
@@ -227,23 +227,42 @@ git push -u origin main
 ## Configuration
 
 ### Changing the LLM Model
-Edit `app.py` line 99-100 to change available models:
-```python
-choices=["qwen2.5:72b", "llama3.1:70b", "your-model-here"]
-```
+- Use the Settings tab dropdown to switch models (queried from `ollama list`).
+- Or set `OLLAMA_URL` in a `.env` file if running Ollama elsewhere.
 
 ### Adjusting Chunk Size
-Edit `vector_store.py` line 51-52:
-```python
-chunk_size=500  # Characters per chunk
-chunk_overlap=50  # Overlap between chunks
-```
+`vector_store.chunk_text(text_data, chunk_size=500)` controls chunk size (characters). Increase to reduce fragments; decrease for finer granularity.
 
 ### Optimizing for Your System
-Run the optimization script for Mac:
+On macOS, you can set Ollama runtime env vars:
 ```bash
-python optimize.py
+./optimize_ollama.sh
 ```
+This only runs on macOS and does not restart Ollama automatically.
+
+### Configuration via `.env`
+Create a `.env` file to override defaults:
+```
+# Server
+GRADIO_HOST=127.0.0.1
+GRADIO_PORT=7860
+
+# Ollama
+OLLAMA_URL=http://localhost:11434/api/generate
+
+# Vector store / embeddings
+CHROMA_DIR=./chroma_db
+EMBEDDING_MODEL=intfloat/multilingual-e5-large
+EMBED_BATCH_SIZE=512
+
+# OCR
+OCR_LANGS=jpn+eng
+OCR_PSM=6
+
+# Logging
+LOG_LEVEL=INFO
+```
+Defaults are sensible; only set what you need.
 
 ## Troubleshooting
 
@@ -279,6 +298,9 @@ MIT License - feel free to use this for your own learning!
 - Designed for Classical Japanese learners
 - Optimized for Apple Silicon Macs
 
-## Support
+## Notes on UI Behavior
+- Thinking Mode: When using reasoning models (e.g., DeepSeek-R1/Qwen-Think), the “Thinking Process” accordion appears only when available and if enabled via the checkbox.
+- Stop Button: Stops the current session’s generation only (does not affect other users/sessions).
 
+## Support
 For issues or questions, please open an issue on GitHub.
