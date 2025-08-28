@@ -82,13 +82,17 @@ Provide a clear, educational response with citations."""
         """Create a detailed prompt with retrieved context"""
         
         # Format context section
-        context_str = ""
-        for i, ctx in enumerate(context):
-            source = ctx['metadata'].get('source', 'unknown')
-            page = ctx['metadata'].get('page', 'N/A')
-            context_str += f"\n[{i+1}] Source: {source}, Page: {page}\n"
-            context_str += f"Content: {ctx['text']}\n"
-            context_str += "-" * 40 + "\n"
+        if context:
+            context_str = ""
+            for i, ctx in enumerate(context):
+                source = ctx['metadata'].get('source', 'unknown')
+                page = ctx['metadata'].get('page', 'N/A')
+                context_str += f"\n[{i+1}] Source: {source}, Page: {page}\n"
+                context_str += f"Content: {ctx['text']}\n"
+                context_str += "-" * 40 + "\n"
+        else:
+            # No database context available
+            context_str = "\n[No documents in database - using general knowledge only]\n"
         
         # Replace placeholders in template
         prompt = self.prompt_template.replace('{context}', context_str)
@@ -102,25 +106,20 @@ Provide a clear, educational response with citations."""
         # Search vector store
         search_results = self.vector_store.search(question, n_results=n_results)
         
-        # Check for empty results
-        if not search_results['documents'] or not search_results['documents'][0]:
-            return {
-                'question': question,
-                'answer': "I couldn't find any relevant information in the database. Please make sure you've uploaded some documents first.",
-                'sources': [],
-                'confidence': 0.0
-            }
-        
-        # Prepare context
+        # Check for empty results and prepare context
         context = []
-        for i in range(len(search_results['documents'][0])):
-            context.append({
-                'text': search_results['documents'][0][i],
-                'metadata': search_results['metadatas'][0][i],
-                'distance': search_results['distances'][0][i]
-            })
+        has_database_results = search_results['documents'] and search_results['documents'][0]
         
-        # Create prompt
+        if has_database_results:
+            # Prepare context from database results
+            for i in range(len(search_results['documents'][0])):
+                context.append({
+                    'text': search_results['documents'][0][i],
+                    'metadata': search_results['metadatas'][0][i],
+                    'distance': search_results['distances'][0][i]
+                })
+        
+        # Create prompt (with or without context)
         prompt = self.create_prompt(question, context)
         
         # Determine timeout based on model size
@@ -184,27 +183,30 @@ Provide a clear, educational response with citations."""
         # Search vector store
         search_results = self.vector_store.search(question, n_results=n_results)
         
-        # Check for empty results
-        if not search_results['documents'] or not search_results['documents'][0]:
-            yield {
-                'token': "I couldn't find any relevant information in the database. Please make sure you've uploaded some documents first.",
-                'done': True,
-                'sources': [],
-                'type': 'answer'
-            }
-            return
-        
-        # Prepare context
+        # Check for empty results and prepare context
         context = []
-        for i in range(len(search_results['documents'][0])):
-            context.append({
+        has_database_results = search_results['documents'] and search_results['documents'][0]
+        
+        if has_database_results:
+            # Prepare context from database results
+            for i in range(len(search_results['documents'][0])):
+                context.append({
                 'text': search_results['documents'][0][i],
                 'metadata': search_results['metadatas'][0][i],
                 'distance': search_results['distances'][0][i]
             })
         
-        # Create prompt
+        # Create prompt (with or without context)
         prompt = self.create_prompt(question, context)
+        
+        # Add notice if no database content
+        if not has_database_results:
+            yield {
+                'token': "📚 *Note: No documents in database. Using model's general knowledge.*\n\n",
+                'done': False,
+                'type': 'answer',
+                'sources': []
+            }
         
         # Check if this is a thinking model
         is_thinking = self.is_thinking_model()
@@ -411,6 +413,11 @@ Provide a clear, educational response with citations."""
         """Specialized method for grammar explanations"""
         query = f"Explain the classical Japanese grammar point: {grammar_point}. Include formation rules, usage, and examples."
         return self.query(query)
+    
+    def explain_grammar_stream(self, grammar_point: str, stop_event=None):
+        """Streaming version of explain_grammar"""
+        query = f"Explain the classical Japanese grammar point: {grammar_point}. Include formation rules, usage, and examples."
+        yield from self.query_stream(query, stop_event=stop_event)
     
     def translate_passage(self, passage: str) -> Dict:
         """Translate classical Japanese passage"""

@@ -7,6 +7,7 @@ import os
 import glob
 import threading
 import logging
+import uuid
 from config import settings
 
 # Initialize components
@@ -16,7 +17,6 @@ ocr = JapaneseOCR()
 db_manager = DatabaseManager()
 
 # Session-based stop events to prevent interference between users
-import uuid
 session_stop_events = {}
 
 # Load available prompts dynamically
@@ -565,7 +565,10 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
             label="Grammar Point",
             placeholder="Enter a grammar point (e.g., らむ, べし, なり)"
         )
-        search_btn = gr.Button("Search & Explain", variant="primary")
+        
+        with gr.Row():
+            search_btn = gr.Button("Search & Explain", variant="primary")
+            stop_grammar_btn = gr.Button("Stop", variant="stop", visible=False)
         
         with gr.Row():
             with gr.Column():
@@ -578,39 +581,95 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         
         grammar_output = gr.Markdown(label="Grammar Explanation")
         
-        def search_with_feedback(grammar_point):
-            if not grammar_point.strip():
-                return "Please enter a grammar point to search for.", "Ready to search"
-            
-            # Show that we're starting the search
-            import time
-            
-            # Update status immediately
-            yield "Searching vector database...", "🔍 Searching database..."
-            time.sleep(0.1)  # Brief pause for UI update
-            
-            # Update status for AI processing
-            yield "Searching vector database...", "🧠 Analyzing with AI model..."
-            
-            # Perform the actual search
-            result = search_examples(grammar_point)
-            
-            # Return final result
-            yield result, f"✅ Found explanation for '{grammar_point}'"
+        # Session state for grammar search
+        grammar_session_id = gr.State(str(uuid.uuid4()))
         
-        search_btn.click(
-            search_with_feedback, 
-            inputs=[grammar_input], 
-            outputs=[grammar_output, grammar_status],
+        def search_with_streaming(grammar_point, session_id):
+            """Streaming version of grammar search"""
+            if not grammar_point.strip():
+                yield "Please enter a grammar point to search for.", "Ready to search", gr.update(visible=False)
+                return
+            
+            # Create session-specific stop event
+            stop_event = threading.Event()
+            session_stop_events[session_id] = stop_event
+            
+            try:
+                # Update status
+                yield "", "🔍 Searching database...", gr.update(visible=True)
+                
+                # Use grammar-focused prompt for this tab
+                original_prompt = assistant.prompt_template
+                grammar_prompt = getattr(assistant, 'grammar_prompt_path', 'prompts/grammar_focused.md')
+                
+                if os.path.exists(grammar_prompt):
+                    assistant.prompt_template = assistant.load_prompt_template(grammar_prompt)
+                
+                # Initialize response
+                full_response = ""
+                
+                # Stream the grammar explanation
+                for chunk in assistant.explain_grammar_stream(grammar_point, stop_event=stop_event):
+                    if stop_event.is_set():
+                        full_response += "\n\n*[Generation stopped by user]*"
+                        yield full_response, "⏹️ Stopped", gr.update(visible=False)
+                        break
+                    
+                    if chunk.get('token'):
+                        full_response += chunk['token']
+                        yield full_response, "🧠 Analyzing with AI model...", gr.update(visible=True)
+                    
+                    if chunk.get('done'):
+                        # Add sources if available
+                        if chunk.get('sources'):
+                            full_response += "\n\n**Sources:**\n"
+                            for src in chunk['sources']:
+                                full_response += f"- {src.get('source', 'Unknown')} (Page {src.get('page', 'N/A')})\n"
+                        
+                        yield full_response, f"✅ Found explanation for '{grammar_point}'", gr.update(visible=False)
+                
+                # Restore original prompt
+                assistant.prompt_template = original_prompt
+                
+            except Exception as e:
+                yield f"❌ Error: {str(e)}", "Error occurred", gr.update(visible=False)
+            finally:
+                # Clean up session
+                session_stop_events.pop(session_id, None)
+        
+        def stop_grammar_generation(session_id):
+            """Stop grammar generation for this session"""
+            if session_id in session_stop_events:
+                session_stop_events[session_id].set()
+            return gr.update(visible=False)
+        
+        search_event = search_btn.click(
+            search_with_streaming, 
+            inputs=[grammar_input, grammar_session_id], 
+            outputs=[grammar_output, grammar_status, stop_grammar_btn],
             show_progress="minimal"
         )
         
+        stop_grammar_btn.click(
+            stop_grammar_generation,
+            inputs=[grammar_session_id],
+            outputs=[stop_grammar_btn],
+            cancels=[search_event]
+        )
+        
         # Also allow Enter key to trigger search
-        grammar_input.submit(
-            search_with_feedback, 
-            inputs=[grammar_input], 
-            outputs=[grammar_output, grammar_status],
+        submit_event = grammar_input.submit(
+            search_with_streaming, 
+            inputs=[grammar_input, grammar_session_id], 
+            outputs=[grammar_output, grammar_status, stop_grammar_btn],
             show_progress="minimal"
+        )
+        
+        stop_grammar_btn.click(
+            stop_grammar_generation,
+            inputs=[grammar_session_id],
+            outputs=[stop_grammar_btn],
+            cancels=[submit_event]
         )
     
     with gr.Tab("Add Documents"):
