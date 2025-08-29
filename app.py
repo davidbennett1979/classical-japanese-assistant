@@ -374,6 +374,32 @@ with gr.Blocks(
                     
                     # Enhanced sources viewer
                     sources_components = create_enhanced_sources_viewer()
+
+                    # Sentence Parser section (small dedicated input)
+                    parser_components = create_sentence_parser_section()
+
+                    def analyze_sentence(sentence):
+                        """Analyze a Classical Japanese sentence using passage analysis prompt"""
+                        if not sentence or not sentence.strip():
+                            return "入力された文がありません • Please enter a sentence."
+                        # Temporarily switch to passage analysis prompt
+                        original_prompt = assistant.prompt_template
+                        passage_prompt = 'prompts/passage_analysis.md'
+                        try:
+                            if os.path.exists(passage_prompt):
+                                assistant.prompt_template = assistant.load_prompt_template(passage_prompt)
+                            result = assistant.translate_passage(sentence)
+                            return result.get('answer', 'No analysis produced.')
+                        except Exception as e:
+                            return f"❌ 解析中にエラー • Error during analysis: {e}"
+                        finally:
+                            assistant.prompt_template = original_prompt
+
+                    parser_components['analyze_btn'].click(
+                        analyze_sentence,
+                        inputs=[parser_components['sentence_input']],
+                        outputs=[parser_components['parser_output']]
+                    )
                     
                     # Chat event handlers
                     submit_event = chat_components['msg'].submit(
@@ -741,6 +767,61 @@ with gr.Blocks(
                         inputs=[png_confirm_input],
                         outputs=[png_delete_status]
                     )
+
+                    gr.Markdown("---")
+                    # Orphaned JSON Import
+                    gr.Markdown("### 📥 JSON インポート • Import Orphaned JSON")
+                    gr.Markdown("processed_docs 内のJSONで、まだデータベースに取り込まれていないものを検出して取り込みます • Scan and import processed JSON files not yet in the database.")
+                    scan_json_btn = gr.Button("🔎 JSONスキャン • Scan for JSON Files", variant="secondary")
+                    json_list = gr.CheckboxGroup(label="検出されたJSON • Found JSON Files (select to import)")
+                    import_selected_btn = gr.Button("📥 選択をインポート • Import Selected", variant="primary")
+                    import_all_btn = gr.Button("📥 すべてインポート • Import All", variant="secondary")
+                    import_status = gr.Markdown("")
+
+                    def scan_orphaned_json():
+                        import glob, json
+                        files = sorted(glob.glob('processed_docs/*.json'))
+                        orphaned = []
+                        for f in files:
+                            name = os.path.basename(f)
+                            source_key = os.path.splitext(name)[0]
+                            try:
+                                with open(f, 'r', encoding='utf-8') as jf:
+                                    data = json.load(jf)
+                                if isinstance(data, list) and data:
+                                    sp = data[0].get('source_pdf') or data[0].get('metadata', {}).get('source')
+                                    if sp:
+                                        source_key = sp
+                            except Exception:
+                                pass
+                            try:
+                                count = vector_store.collection.count(where={"source": source_key})
+                            except Exception:
+                                count = 0
+                            if count == 0:
+                                orphaned.append(name)
+                        return gr.update(choices=orphaned, value=[])
+
+                    def import_json_files(selected):
+                        import json
+                        if not selected:
+                            return "⚠️ ファイルが選択されていません • No files selected"
+                        total_added = 0
+                        for name in selected:
+                            path = os.path.join('processed_docs', name)
+                            try:
+                                with open(path, 'r', encoding='utf-8') as f:
+                                    data = json.load(f)
+                                chunks = vector_store.chunk_text(data)
+                                vector_store.add_documents(chunks)
+                                total_added += len(chunks)
+                            except Exception as e:
+                                return f"❌ {name} のインポートに失敗 • Failed on {name}: {e}"
+                        return f"✅ {len(selected)} 件のJSONをインポート • Imported {len(selected)} JSON files, 追加 • added ~{total_added:,} チャンク • chunks"
+
+                    scan_json_btn.click(scan_orphaned_json, None, json_list)
+                    import_selected_btn.click(import_json_files, json_list, import_status)
+                    import_all_btn.click(lambda choices: choices, json_list, json_list).then(import_json_files, json_list, import_status)
         
         # System & Settings
         with gr.Tab("⚙️ システム • System"):

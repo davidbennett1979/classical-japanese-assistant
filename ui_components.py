@@ -210,6 +210,38 @@ def create_enhanced_sources_viewer():
         'sources_md': sources_md
     }
 
+def create_sentence_parser_section():
+    """Create a small sentence parser input section for the Chat tab"""
+    with gr.Column(elem_classes=["content-card"]):
+        gr.Markdown(
+            """
+            ### 🔍 文解析 • Sentence Parser
+            Paste a Classical Japanese sentence to get a morphological breakdown, particles/auxiliaries, and brief translation.
+            """,
+            elem_classes=["section-header"]
+        )
+        sentence_input = gr.Textbox(
+            label="文 • Sentence",
+            placeholder="例：花の色は移りにけりないたづらに",
+            lines=2,
+            elem_classes=["enhanced-input"]
+        )
+        with gr.Row():
+            analyze_btn = gr.Button(
+                "解析 • Analyze",
+                variant="primary",
+                elem_classes=["btn-primary"]
+            )
+        parser_output = gr.Markdown(
+            label="解析結果 • Analysis",
+            elem_classes=["explanation-card"]
+        )
+    return {
+        'sentence_input': sentence_input,
+        'analyze_btn': analyze_btn,
+        'parser_output': parser_output
+    }
+
 def create_notes_interface(add_note_function):
     """Create enhanced notes interface"""
     
