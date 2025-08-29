@@ -83,13 +83,36 @@ class JapaneseVectorStore:
         
         return chunks
     
+    def sanitize_metadata(self, metadata: Dict) -> Dict:
+        """Ensure metadata only contains simple types that ChromaDB accepts"""
+        clean_metadata = {}
+        for key, value in metadata.items():
+            if value is None or isinstance(value, (str, int, float, bool)):
+                clean_metadata[key] = value
+            elif isinstance(value, dict):
+                # Flatten dictionary values (e.g., position {'x': 1017, 'y': 979})
+                if 'x' in value and 'y' in value:
+                    clean_metadata[f"{key}_x"] = value.get('x')
+                    clean_metadata[f"{key}_y"] = value.get('y')
+                else:
+                    # Convert other dicts to string representation
+                    clean_metadata[key] = str(value)
+            elif isinstance(value, (list, tuple)):
+                # Convert lists/tuples to comma-separated strings
+                clean_metadata[key] = ', '.join(str(v) for v in value)
+            else:
+                # Convert any other type to string
+                clean_metadata[key] = str(value)
+        return clean_metadata
+    
     def add_documents(self, documents: List[Dict]):
         """Add documents to vector store"""
         if not documents:
             return
         
         texts = [doc['text'] for doc in documents]
-        metadatas = [doc['metadata'] for doc in documents]
+        # Sanitize metadata to ensure ChromaDB compatibility
+        metadatas = [self.sanitize_metadata(doc['metadata']) for doc in documents]
 
         # Generate stable IDs using content + key metadata
         ids: list[str] = []

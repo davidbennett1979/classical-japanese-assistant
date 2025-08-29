@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 import logging
 
+# Prevent tokenizers parallelism warning when forking processes
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 # Load environment variables from a .env file if present
 load_dotenv()
 
