@@ -120,6 +120,7 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, knowled
                 has_sources = chunk.get('sources') and len(chunk.get('sources', [])) > 0
                 route = chunk.get('route', 'AUTO')
                 confidence = chunk.get('confidence', 0.0)
+                manual_override = bool(chunk.get('manual_override'))
                 
                 # Enhanced model info with routing information
                 route_emojis = {
@@ -141,9 +142,17 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, knowled
                 
                 model_info = f"🤖 モデル: **{assistant.model_name}** {'(推論モデル • Reasoning Model)' if is_thinking_model else ''}\n"
                 model_info += f"{route_emoji} **知識ソース • Knowledge Source:** {route_desc}"
+                if manual_override:
+                    model_info += " (手動 • Manual Override)"
                 
                 if confidence > 0:
                     model_info += f" (信頼度 • Confidence: {confidence:.1%})"
+                
+                # Additional banner notes
+                if route == 'GENERAL':
+                    model_info += "\n🧠 一般知識のみ • General knowledge only (no textbook citations)"
+                if route == 'RAG' and not has_sources:
+                    model_info += "\n⚠️ 教科書の一致なし • No textbook matches; response may be limited"
                 
                 if chunk.get('sources'):
                     last_sources = chunk['sources']
@@ -990,27 +999,28 @@ with gr.Blocks(
                 try:
                     stats = assistant.get_routing_stats()
                     if stats['total'] == 0:
-                        return "📊 **Knowledge Routing Statistics**\\n\\nNo queries processed yet."
-                    
+                        return "📊 **Knowledge Routing Statistics**\nNo queries processed yet."
+
                     lines = [
-                        f"📊 **Knowledge Routing Statistics**\\n",
+                        "📊 **Knowledge Routing Statistics**",
                         f"**Total Queries**: {stats['total']}",
-                        f"**Average Confidence**: {stats['avg_confidence']:.1%}\\n",
-                        "**Route Distribution**:"
+                        f"**Average Confidence**: {stats['avg_confidence']:.1%}",
+                        "",
+                        "**Route Distribution:**",
                     ]
-                    
+
                     route_emojis = {
                         'RAG': '📚',
-                        'GENERAL': '🧠', 
-                        'HYBRID': '🔄'
+                        'GENERAL': '🧠',
+                        'HYBRID': '🔄',
                     }
-                    
+
                     for route, percentage in stats['route_percentages'].items():
                         emoji = route_emojis.get(route, '❓')
                         lines.append(f"- {emoji} **{route}**: {percentage:.1f}%")
-                    
-                    return "\\n".join(lines)
-                
+
+                    return "\n".join(lines)
+
                 except Exception as e:
                     return f"❌ Routing stats error: {e}"
             
@@ -1039,6 +1049,15 @@ with gr.Blocks(
                     dashboard_components['study_time_display'], 
                     dashboard_components['grammar_points_display']
                 ]
+            )
+
+            # Routing stats card
+            routing_stats_display = gr.Markdown("📊 **Knowledge Routing Statistics**\n\nClick the button to view current routing metrics.")
+            show_routing_btn = gr.Button("📊 ルーティング統計を表示 • Show Routing Stats", elem_classes=["btn-secondary"])
+            show_routing_btn.click(
+                lambda: gr.update(value=get_routing_stats_display()),
+                None,
+                routing_stats_display
             )
             
             dashboard_components['health_check_btn'].click(
@@ -1127,6 +1146,33 @@ with gr.Blocks(
                     return f"❌ 辞書読み込みエラー • Failed to load dictionary: {e}"
 
             load_dict_btn.click(load_dictionary, inputs=[dict_file], outputs=[dict_status], show_progress="minimal")
+
+            gr.Markdown("---")
+            # Hybrid Router Settings
+            gr.Markdown("### 🧠 ハイブリッドルーター設定 • Hybrid Router Settings")
+            density_slider = gr.Slider(0.0, 1.0, value=assistant.classifier.hit_density_threshold, step=0.05, label="ヒット密度閾値 • Hit Density Threshold")
+            diversity_number = gr.Number(value=assistant.classifier.diversity_min_sources, label="最少ソース数 • Min Distinct Sources")
+            distance_slider = gr.Slider(0.0, 1.0, value=assistant.classifier.distance_threshold, step=0.05, label="距離閾値 • Distance Threshold")
+            save_router_btn = gr.Button("💾 設定保存 • Save Router Settings", elem_classes=["btn-primary"])
+            save_router_status = gr.Markdown("")
+
+            def save_router_settings(density, diversity, distance):
+                try:
+                    assistant.update_classifier_thresholds(
+                        hit_density_threshold=float(density),
+                        diversity_min_sources=int(diversity),
+                        distance_threshold=float(distance)
+                    )
+                    return f"✅ ルーター設定を更新 • Updated: density={density:.2f}, diversity={int(diversity)}, distance={distance:.2f}"
+                except Exception as e:
+                    return f"❌ 設定更新エラー • Failed to update: {e}"
+
+            save_router_btn.click(
+                save_router_settings,
+                inputs=[density_slider, diversity_number, distance_slider],
+                outputs=[save_router_status],
+                show_progress="minimal"
+            )
             
             def switch_model(model_name):
                 assistant.model_name = model_name

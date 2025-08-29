@@ -182,9 +182,12 @@ Provide a clear, educational response with citations."""
             'confidence': 1.0 - (sum(ctx['distance'] for ctx in context) / len(context)) if context else 0.0
         }
     
-    def query_hybrid_stream(self, question: str, knowledge_mode: str = "auto", n_results: int = 3, stop_event=None):
+    def query_hybrid_stream(self, question: str, knowledge_mode: str = "auto", n_results: int = None, stop_event=None):
         """Hybrid knowledge system streaming query with intelligent routing"""
         
+        if n_results is None:
+            n_results = getattr(settings, 'router_top_k', 8)
+
         # Search vector store for all modes (needed for classification)
         search_results = self.vector_store.search(question, n_results=n_results)
         
@@ -217,6 +220,9 @@ Provide a clear, educational response with citations."""
             'keyword_signals': classification.keyword_signals
         }
         self.route_telemetry.append(telemetry_entry)
+        # Cap telemetry to avoid unbounded growth
+        if len(self.route_telemetry) > 500:
+            self.route_telemetry = self.route_telemetry[-500:]
         
         # Route to appropriate method
         if classification.route == "RAG":

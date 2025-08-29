@@ -8,6 +8,7 @@ Classifies user questions to route between:
 """
 
 import re
+import unicodedata
 import logging
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
@@ -71,7 +72,8 @@ class QuestionClassifier:
         
     def classify_keywords(self, question: str) -> Dict[str, List[str]]:
         """Classify question based on keyword matching"""
-        question_lower = question.lower()
+        # Normalize to improve matching across variants
+        question_lower = unicodedata.normalize('NFKC', question or "").lower()
         
         signals = {
             'grammar': [],

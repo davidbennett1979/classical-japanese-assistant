@@ -35,6 +35,8 @@ class Settings:
     # App behavior
     queue_concurrency: int = int(os.getenv("QUEUE_CONCURRENCY", "8"))
     session_ttl_minutes: int = int(os.getenv("SESSION_TTL_MINUTES", "60"))
+    # Hybrid router
+    router_top_k: int = int(os.getenv("ROUTER_TOP_K", "8"))
 
 
 settings = Settings()
