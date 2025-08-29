@@ -115,13 +115,7 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, session
             # Process different types of chunks
             if chunk.get('type') == 'model_info':
                 is_thinking_model = chunk.get('is_thinking_model', False)
-                has_sources = chunk.get('sources') and len(chunk.get('sources', [])) > 0
-                
-                if has_sources:
-                    model_info = f"🤖 モデル: **{assistant.model_name}** {'(推論モデル • Reasoning Model)' if is_thinking_model else ''}\n📚 ソース: 教科書の知識を使用 • Using textbook knowledge"
-                else:
-                    model_info = f"🤖 モデル: **{assistant.model_name}** {'(推論モデル • Reasoning Model)' if is_thinking_model else ''}\n🧠 ソース: モデルの一般知識を使用 • Using model's general knowledge"
-                
+                model_info = f"🤖 モデル: {assistant.model_name} {'(推論モデル • Reasoning Model)' if is_thinking_model else ''}"
                 if chunk.get('sources'):
                     last_sources = chunk['sources']
             
@@ -178,8 +172,6 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, session
 
 def enhanced_grammar_search(grammar_point, session_id):
     """Enhanced streaming grammar search"""
-    global last_sources
-    
     if not grammar_point.strip():
         yield (
             "文法項目を入力してください • Please enter a grammar point to search for.", 
@@ -215,9 +207,13 @@ def enhanced_grammar_search(grammar_point, session_id):
                 yield full_response, "🧠 AIモデルで分析中... • Analyzing with AI model...", gr.update(visible=True)
             
             if chunk.get('done'):
-                # Update global sources for the sources viewer (same as chat)
+                # Add sources with bilingual labels
                 if chunk.get('sources'):
-                    last_sources = chunk['sources']
+                    full_response += "\n\n**📚 出典 • Sources:**\n"
+                    for src in chunk['sources']:
+                        source_name = src.get('source', 'Unknown')
+                        page_num = src.get('page', 'N/A')
+                        full_response += f"- {source_name} (ページ • Page {page_num})\n"
                 
                 yield full_response, f"✅ '{grammar_point}' の説明を見つけました • Found explanation for '{grammar_point}'", gr.update(visible=False)
         
@@ -335,16 +331,16 @@ with gr.Blocks(
     css=CUSTOM_CSS + get_seasonal_css(current_season)
 ) as app:
     
-    # Simple static header block
-    gr.HTML(
-        """
-        <div class="simple-header">
-            <h1 class="header-title">🎌 Classical Japanese Learning Assistant</h1>
-            <p class="header-subtitle">古典日本語学習アシスタント • Learn Classical Japanese with AI and textbook knowledge</p>
-        </div>
-        """,
-        elem_classes=["header-container"]
-    )
+    # Beautiful Japanese-inspired header
+    with gr.Column(elem_classes=["app-header"]):
+        gr.Markdown(
+            """
+            <div class="app-title">🎌 古典日本語学習アシスタント</div>
+            <div class="app-subtitle">Classical Japanese Learning Assistant</div>
+            <div class="app-subtitle">AIと教科書の知識で古典日本語を学ぼう • Learn Classical Japanese with AI and textbook knowledge</div>
+            """,
+            elem_classes=["sakura-pattern"]
+        )
     
     # Theme selector
     season_dropdown = create_seasonal_theme_selector()
@@ -408,25 +404,6 @@ with gr.Blocks(
                         lambda: "", None, chat_components['msg']
                     )
                     
-                    # Show stop button during generation
-                    chat_components['msg'].submit(lambda: gr.update(visible=True), None, chat_components['stop_btn'], queue=False)
-                    chat_components['submit_btn'].click(lambda: gr.update(visible=True), None, chat_components['stop_btn'], queue=False)
-                    
-                    # Stop button functionality
-                    def stop_generation_handler(current_session_id):
-                        stop_event = session_stop_events.get(current_session_id)
-                        if stop_event:
-                            stop_event.set()
-                        return gr.update(visible=False)
-                    
-                    chat_components['stop_btn'].click(
-                        stop_generation_handler,
-                        inputs=[chat_components['session_id_state']],
-                        outputs=[chat_components['stop_btn']],
-                        cancels=[submit_event, click_event],
-                        queue=False
-                    )
-                    
                     # Clear functionality
                     def clear_all():
                         return (
@@ -448,9 +425,6 @@ with gr.Blocks(
                 with gr.Tab("📖 文法検索 • Grammar Search"):
                     grammar_components = create_enhanced_grammar_search(enhanced_grammar_search)
                     
-                    # Add sources viewer to grammar tab (same as chat)
-                    grammar_sources_components = create_enhanced_sources_viewer()
-                    
                     # Wire up grammar search
                     search_event = grammar_components['search_btn'].click(
                         enhanced_grammar_search,
@@ -461,34 +435,6 @@ with gr.Blocks(
                             grammar_components['stop_grammar_btn']
                         ],
                         show_progress="minimal"
-                    )
-                    
-                    # Sources refresh for grammar tab
-                    grammar_sources_components['refresh_sources_btn'].click(
-                        format_sources_markdown, None, grammar_sources_components['sources_md']
-                    )
-                    
-                    # Grammar stop button functionality
-                    def stop_grammar_generation(session_id):
-                        """Stop grammar generation for this session"""
-                        if session_id in session_stop_events:
-                            session_stop_events[session_id].set()
-                        return gr.update(visible=False)
-                    
-                    grammar_components['stop_grammar_btn'].click(
-                        stop_grammar_generation,
-                        inputs=[grammar_components['grammar_session_id']],
-                        outputs=[grammar_components['stop_grammar_btn']],
-                        cancels=[search_event],
-                        queue=False
-                    )
-                    
-                    # Show stop button during grammar search
-                    grammar_components['search_btn'].click(
-                        lambda: gr.update(visible=True), 
-                        None, 
-                        grammar_components['stop_grammar_btn'], 
-                        queue=False
                     )
                     
                     # Example button handlers
@@ -567,297 +513,12 @@ with gr.Blocks(
                         [file_input, start_page_in, end_page_in, resume_chk],
                         process_output
                     )
-                
-                # Database Management
-                with gr.Tab("🗄️ データベース管理 • Database Management"):
-                    gr.Markdown(
-                        """
-                        ### 📊 データベース統計 • Database Statistics
-                        View and manage your textbook database.
-                        """
-                    )
-                    
-                    # Database statistics
-                    db_stats_display = gr.Markdown("Click 'Refresh Stats' to view database information")
-                    png_stats_display = gr.Markdown("PNG file information will appear here")
-                    refresh_db_stats_btn = gr.Button(
-                        "🔄 統計更新 • Refresh Stats",
-                        variant="primary",
-                        elem_classes=["btn-primary"]
-                    )
-                    
-                    gr.Markdown("---")
-                    
-                    # Delete textbook section
-                    gr.Markdown("### ⚠️ 文書削除 • Delete Documents")
-                    gr.Markdown("**警告 • Warning**: 選択した文書のすべてのチャンクが永続的に削除されます • This permanently removes all chunks from the selected textbook")
-                    
-                    textbook_dropdown = gr.Dropdown(
-                        choices=[],
-                        label="削除する文書を選択 • Select Document to Delete",
-                        info="完全に削除する文書を選択してください • Choose which document to remove completely",
-                        elem_classes=["enhanced-dropdown"]
-                    )
-                    
-                    confirm_input = gr.Textbox(
-                        label="削除確認 • Confirmation",
-                        placeholder="Type 'DELETE filename.pdf' to confirm",
-                        info="正確に入力してください • Type exactly: DELETE [document filename]",
-                        elem_classes=["enhanced-input"]
-                    )
-                    
-                    delete_btn = gr.Button(
-                        "🗑️ 文書削除 • Delete Document",
-                        variant="stop",
-                        elem_classes=["btn-secondary"]
-                    )
-                    
-                    delete_status = gr.Textbox(
-                        label="削除状況 • Deletion Status",
-                        interactive=False,
-                        elem_classes=["status-display"]
-                    )
-                    
-                    # Database management functions
-                    def get_database_stats():
-                        """Get current database statistics"""
-                        try:
-                            stats = db_manager.get_textbook_stats()
-                            if 'error' in stats:
-                                return f"❌ Error: {stats['error']}", [], ""
-                            
-                            # Get PNG statistics
-                            png_info = db_manager.get_png_stats()
-                            png_summary = ""
-                            if png_info['count'] > 0:
-                                size_display = f"{png_info['size_gb']} GB" if png_info['size_gb'] >= 1 else f"{png_info['size_mb']} MB"
-                                png_summary = f"📁 **PNG Files**: {png_info['count']} files ({size_display} total)"
-                            else:
-                                png_summary = "📁 **PNG Files**: No PNG files found"
-                            
-                            # Format textbook list
-                            textbook_list = []
-                            for source, count in stats['textbooks'].items():
-                                textbook_list.append(f"📚 **{source}**: {count:,} chunks")
-                            
-                            textbook_info = "\\n".join(textbook_list)
-                            
-                            summary = f"""## データベース概要 • Database Overview
-**総文書数 • Total Documents**: {stats['total_documents']:,} chunks
-**文書数 • Number of Books**: {len(stats['textbooks'])} documents
-**重複 • Duplicates Found**: {stats['duplicates']:,} entries
-{png_summary}
-
-### データベース内の文書 • Documents in Database:
-{textbook_info}
-                            """
-                            
-                            # Return dropdown options for deletion
-                            textbook_options = list(stats['textbooks'].keys())
-                            return summary, textbook_options, png_summary
-                        except Exception as e:
-                            error_msg = f"❌ Error getting stats: {str(e)}"
-                            return error_msg, [], error_msg
-                    
-                    def delete_textbook_func(textbook_name, confirm_text):
-                        """Delete a textbook from the database"""
-                        if not textbook_name:
-                            return "文書を選択してください • Please select a document to delete."
-                        
-                        if confirm_text != f"DELETE {textbook_name}":
-                            return f"❌ 正確に入力してください • Please type exactly: DELETE {textbook_name}"
-                        
-                        try:
-                            result = db_manager.delete_textbook(textbook_name)
-                            if result['success']:
-                                return f"✅ {result['message']}"
-                            else:
-                                return f"❌ {result['message']}"
-                        except Exception as e:
-                            return f"❌ Error deleting document: {str(e)}"
-                    
-                    # Connect database management functions
-                    def refresh_stats():
-                        stats_text, textbook_options, png_info = get_database_stats()
-                        return stats_text, gr.update(choices=textbook_options), png_info
-                    
-                    refresh_db_stats_btn.click(
-                        refresh_stats,
-                        outputs=[db_stats_display, textbook_dropdown, png_stats_display]
-                    )
-                    
-                    delete_btn.click(
-                        delete_textbook_func,
-                        inputs=[textbook_dropdown, confirm_input],
-                        outputs=[delete_status]
-                    )
-                    
-                    gr.Markdown("---")
-                    
-                    # PNG cleanup section
-                    gr.Markdown("### 📁 PNG ファイル削除 • Clean PNG Files")
-                    gr.Markdown("**⚠️ 警告 • Warning**: PNGファイルはOCR処理に使用されます。データベースが正常に動作することを確認してから削除してください。")
-                    gr.Markdown("**⚠️ Warning**: PNG files are used for OCR processing. Delete only after confirming database is working correctly.")
-                    gr.Markdown("これにより、processed_docsフォルダー内のすべてのPNGファイルが削除されます。JSONファイルは復旧のために保持されます。")
-                    gr.Markdown("This will delete ALL PNG files in processed_docs folder. JSON files will be preserved for recovery.")
-                    
-                    # PNG stats are shown above with the main database stats
-                    
-                    png_confirm_input = gr.Textbox(
-                        label="削除確認 • Confirmation Required",
-                        placeholder="Type 'DELETE PNGs' to confirm",
-                        info="正確に入力してください • Type exactly: DELETE PNGs",
-                        elem_classes=["enhanced-input"]
-                    )
-                    
-                    delete_pngs_btn = gr.Button(
-                        "🗑️ PNG ファイル削除 • Delete PNG Files",
-                        variant="stop",
-                        elem_classes=["btn-secondary"]
-                    )
-                    
-                    png_delete_status = gr.Textbox(
-                        label="PNG削除状況 • PNG Deletion Status",
-                        interactive=False,
-                        elem_classes=["status-display"]
-                    )
-                    
-                    def delete_png_files_func(confirm_text):
-                        """Delete PNG files after confirmation"""
-                        if confirm_text != "DELETE PNGs":
-                            return "❌ 'DELETE PNGs' と正確に入力してください • Please type 'DELETE PNGs' exactly to confirm deletion."
-                        
-                        try:
-                            result = db_manager.delete_png_files()
-                            if result['success']:
-                                return f"✅ {result['message']}"
-                            else:
-                                return f"❌ {result['message']}"
-                        except Exception as e:
-                            return f"❌ Error deleting PNG files: {str(e)}"
-                    
-                    delete_pngs_btn.click(
-                        delete_png_files_func,
-                        inputs=[png_confirm_input],
-                        outputs=[png_delete_status]
-                    )
         
         # System & Settings
         with gr.Tab("⚙️ システム • System"):
             
             # Dashboard
             dashboard_components = create_dashboard_interface(None)
-            
-            # Connect dashboard functions
-            def update_dashboard_stats():
-                """Update dashboard statistics"""
-                try:
-                    # Get detailed database statistics
-                    stats = db_manager.get_textbook_stats()
-                    if 'error' in stats:
-                        error_msg = f"**❌ Error**\n\n{stats['error']}"
-                        return error_msg, error_msg, error_msg
-                    
-                    # Enhanced document display
-                    textbook_list = []
-                    for source, count in stats['textbooks'].items():
-                        textbook_list.append(f"• **{source}**: {count:,} chunks")
-                    
-                    if textbook_list:
-                        textbook_info = "\\n".join(textbook_list)
-                        docs_display = f"""**📚 総文書数 • Total Documents**
-
-**{stats['total_documents']:,}** total chunks
-**{len(stats['textbooks'])}** documents
-
-### 文書一覧 • Document Library:
-{textbook_info}"""
-                    else:
-                        docs_display = "**📚 総文書数 • Total Documents**\n\nNo documents in database"
-                    
-                    # Simple time tracking placeholder
-                    time_display = "**⏰ 学習時間 • Study Time**\n\nToday: 0 min\nTotal: 0 min"
-                    
-                    # Grammar points placeholder  
-                    grammar_display = "**📖 文法項目 • Grammar Points**\n\nStudied: 0\nMastered: 0"
-                    
-                    return docs_display, time_display, grammar_display
-                except Exception as e:
-                    error_msg = f"**❌ Error**\n\n{str(e)}"
-                    return error_msg, error_msg, error_msg
-            
-            def run_health_checks():
-                """Run comprehensive health checks"""
-                messages = []
-                
-                # Ollama check
-                try:
-                    import subprocess
-                    result = subprocess.run(['ollama', 'list'], capture_output=True, text=True, timeout=10)
-                    if result.returncode == 0:
-                        models = [line.split()[0] for line in result.stdout.strip().split('\n')[1:] if line.strip()]
-                        messages.append(f"✅ Ollama reachable. Models: {', '.join(models) if models else 'none'}")
-                    else:
-                        messages.append("❌ Ollama not responding to 'ollama list'")
-                except Exception as e:
-                    messages.append(f"❌ Ollama check failed: {e}")
-                
-                # Tesseract check
-                try:
-                    import subprocess
-                    result = subprocess.run(['tesseract', '--list-langs'], capture_output=True, text=True)
-                    has_jpn = 'jpn' in result.stdout
-                    messages.append("✅ Tesseract installed" + (" with 'jpn'" if has_jpn else " (missing 'jpn' language)"))
-                except Exception as e:
-                    messages.append(f"❌ Tesseract check failed: {e}")
-                
-                # ChromaDB check
-                try:
-                    count = vector_store.collection.count()
-                    messages.append(f"✅ ChromaDB OK. Documents: {count}")
-                except Exception as e:
-                    messages.append(f"❌ ChromaDB check failed: {e}")
-                
-                return "\\n\\n".join(messages)
-            
-            def create_backup():
-                """Create database backup"""
-                try:
-                    import shutil
-                    import datetime
-                    import os
-                    
-                    os.makedirs('backups', exist_ok=True)
-                    timestamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-                    base_name = os.path.join('backups', f'chroma_db-{timestamp}')
-                    archive_path = shutil.make_archive(base_name, 'zip', root_dir='.', base_dir='chroma_db')
-                    
-                    return f"✅ Backup created: {archive_path}"
-                except Exception as e:
-                    return f"❌ Backup failed: {str(e)}"
-            
-            # Connect dashboard buttons
-            dashboard_components['refresh_stats_btn'].click(
-                update_dashboard_stats,
-                None,
-                [
-                    dashboard_components['total_docs_display'],
-                    dashboard_components['study_time_display'], 
-                    dashboard_components['grammar_points_display']
-                ]
-            )
-            
-            dashboard_components['health_check_btn'].click(
-                lambda: gr.update(value=run_health_checks()),
-                None,
-                dashboard_components['total_docs_display']  # Reuse for health check display
-            )
-            
-            dashboard_components['backup_btn'].click(
-                lambda: gr.update(value=create_backup()),
-                None,
-                dashboard_components['study_time_display']  # Reuse for backup status
-            )
             
             gr.Markdown("---")
             
