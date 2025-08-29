@@ -300,14 +300,40 @@ def format_sources_markdown():
     except Exception as e:
         return f"出典の表示中にエラーが発生しました • Error displaying sources: {e}"
 
+def detect_pdf_pages(file_path):
+    """Quickly detect the number of pages in a PDF"""
+    try:
+        from pdf2image import pdfinfo_from_path
+        info = pdfinfo_from_path(file_path)
+        return info.get('Pages', 0)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Could not detect PDF pages: {e}")
+        return 0
+
 def process_new_document_enhanced(file, start_page=None, end_page=None, resume_from_json=True):
     """Enhanced document processing with bilingual status updates"""
     if not file:
         yield "ファイルを選択してください • Please select a file."
         return
     
+    # Fix page range values - treat 0 or empty as None (process all pages)
+    if start_page == 0 or start_page == "":
+        start_page = None
+    if end_page == 0 or end_page == "":
+        end_page = None
+    
+    # Convert to int if provided
+    if start_page is not None:
+        start_page = int(start_page)
+    if end_page is not None:
+        end_page = int(end_page)
+    
     try:
         yield f"📄 処理開始 • Starting processing: {file.name}"
+        if start_page is not None or end_page is not None:
+            yield f"📖 ページ範囲 • Page range: {start_page or 'start'} to {end_page or 'end'}"
+        else:
+            yield f"📖 すべてのページを処理 • Processing all pages"
         
         # Check for existing JSON
         pdf_name = os.path.basename(file.name)
@@ -324,14 +350,16 @@ def process_new_document_enhanced(file, start_page=None, end_page=None, resume_f
             yield "🔍 OCRでテキスト抽出中 • Extracting text with OCR..."
             ocr_data = []
             
-            for page_data in ocr.process_pdf(file.name, start_page=start_page, end_page=end_page):
-                if isinstance(page_data, str) and "Processing" in page_data:
+            for item in ocr.process_pdf(file.name, start_page=start_page, end_page=end_page):
+                if isinstance(item, str):
                     # Status update
-                    yield f"📖 {page_data}"
-                else:
-                    # Actual page data
-                    ocr_data.append(page_data)
-                    yield f"📄 ページ処理完了 • Page processed: {len(ocr_data)} pages done"
+                    yield f"📖 {item}"
+                elif isinstance(item, list):
+                    # Actual page data (list of text chunks from a page)
+                    ocr_data.extend(item)
+                    page_count = len([x for x in ocr_data if x.get('page_number')])
+                    unique_pages = len(set(x.get('page_number') for x in ocr_data if x.get('page_number')))
+                    yield f"📄 ページ処理完了 • Page processed: {unique_pages} pages done"
         
         # Chunking
         yield f"📝 テキストをチャンク化中 • Chunking text into segments..."
@@ -650,16 +678,35 @@ with gr.Blocks(
                         elem_classes=["enhanced-file-input"]
                     )
                     
+                    # File info display
+                    file_info = gr.Markdown(
+                        value="",
+                        visible=False,
+                        elem_classes=["info-display"]
+                    )
+                    
+                    # Process entire document checkbox
+                    process_all_chk = gr.Checkbox(
+                        label="📖 文書全体を処理 • Process entire document",
+                        value=True,
+                        info="チェックを外して特定のページ範囲を指定 • Uncheck to specify page range",
+                        elem_classes=["japanese-checkbox"]
+                    )
+                    
                     with gr.Row():
                         start_page_in = gr.Number(
-                            label="開始ページ • Start Page",
+                            label="開始ページ • Start Page (1-based)",
                             value=None,
-                            elem_classes=["enhanced-input"]
+                            interactive=False,
+                            elem_classes=["enhanced-input"],
+                            info="最初のページ番号 • First page to process"
                         )
                         end_page_in = gr.Number(
-                            label="終了ページ • End Page",
+                            label="終了ページ • End Page (1-based)",
                             value=None,
-                            elem_classes=["enhanced-input"]
+                            interactive=False,
+                            elem_classes=["enhanced-input"],
+                            info="最後のページ番号 • Last page to process"
                         )
                     
                     resume_chk = gr.Checkbox(
@@ -681,9 +728,75 @@ with gr.Blocks(
                         elem_classes=["status-display", "process-log"]
                     )
                     
+                    # Event handlers for file selection and checkbox
+                    def on_file_select(file):
+                        """Handle file selection - detect pages for PDFs"""
+                        if not file:
+                            return gr.update(value="", visible=False), gr.update(), gr.update()
+                        
+                        filename = os.path.basename(file.name)
+                        if file.name.lower().endswith('.pdf'):
+                            page_count = detect_pdf_pages(file.name)
+                            if page_count > 0:
+                                info_text = f"📄 **{filename}**\n📊 総ページ数 • Total pages: **{page_count}**"
+                                return (
+                                    gr.update(value=info_text, visible=True),
+                                    gr.update(placeholder=str(1)),
+                                    gr.update(placeholder=str(page_count))
+                                )
+                            else:
+                                info_text = f"📄 **{filename}**\n⚠️ ページ数を検出できませんでした • Could not detect page count"
+                                return (
+                                    gr.update(value=info_text, visible=True),
+                                    gr.update(placeholder="1"),
+                                    gr.update(placeholder="Last")
+                                )
+                        else:
+                            info_text = f"📷 **{filename}** (画像 • Image)"
+                            return (
+                                gr.update(value=info_text, visible=True),
+                                gr.update(),
+                                gr.update()
+                            )
+                    
+                    def toggle_page_inputs(process_all):
+                        """Enable/disable page range inputs based on checkbox"""
+                        if process_all:
+                            return (
+                                gr.update(value=None, interactive=False),
+                                gr.update(value=None, interactive=False)
+                            )
+                        else:
+                            return (
+                                gr.update(interactive=True),
+                                gr.update(interactive=True)
+                            )
+                    
+                    # Connect event handlers
+                    file_input.change(
+                        on_file_select,
+                        inputs=[file_input],
+                        outputs=[file_info, start_page_in, end_page_in]
+                    )
+                    
+                    process_all_chk.change(
+                        toggle_page_inputs,
+                        inputs=[process_all_chk],
+                        outputs=[start_page_in, end_page_in]
+                    )
+                    
+                    def process_with_validation(file, start_page, end_page, resume_from_json, process_all):
+                        """Wrapper to handle process all checkbox"""
+                        if process_all:
+                            # Process entire document
+                            yield from process_new_document_enhanced(file, None, None, resume_from_json)
+                        else:
+                            # Process specified range
+                            yield from process_new_document_enhanced(file, start_page, end_page, resume_from_json)
+                    
                     process_btn.click(
-                        process_new_document_enhanced,
-                        [file_input, start_page_in, end_page_in, resume_chk],
+                        process_with_validation,
+                        [file_input, start_page_in, end_page_in, resume_chk, process_all_chk],
                         process_output
                     )
                 

@@ -97,12 +97,21 @@ class JapaneseOCR:
         return structured_text
     
     def process_pdf(self, pdf_path, start_page=None, end_page=None):
-        """Convert PDF to images and extract text"""
-        logging.getLogger(__name__).info(f"Processing PDF: {pdf_path}")
+        """Convert PDF to images and extract text - yields progress updates"""
+        logging.getLogger(__name__).info(f"Processing PDF: {pdf_path}, start={start_page}, end={end_page}")
         
-        # Convert PDF to images
-        images = convert_from_path(pdf_path, 300, first_page=start_page, 
-                                  last_page=end_page)
+        # Convert PDF to images - handle None values properly
+        if start_page is not None or end_page is not None:
+            yield f"Converting PDF pages {start_page or 'first'} to {end_page or 'last'}..."
+            images = convert_from_path(pdf_path, 300, first_page=start_page, 
+                                      last_page=end_page)
+        else:
+            # Process all pages when no range specified
+            yield f"Converting entire PDF document..."
+            images = convert_from_path(pdf_path, 300)
+        
+        total_pages = len(images)
+        yield f"Starting OCR processing for {total_pages} pages..."
         
         all_text_data = []
         
@@ -111,6 +120,7 @@ class JapaneseOCR:
             image_path = os.path.join(self.output_dir, f"page_{page_num:04d}.png")
             image.save(image_path, 'PNG')
             
+            yield f"Processing page {page_num}/{page_num + total_pages - i - 1}..."
             logging.getLogger(__name__).info(f"Processing page {page_num}...")
             text_data = self.extract_text_with_coordinates(image_path)
             
@@ -119,6 +129,8 @@ class JapaneseOCR:
                 item['page_number'] = page_num
             
             all_text_data.extend(text_data)
+            # Yield the page data so app can collect it
+            yield text_data
         
         # Save structured data
         output_json = os.path.join(self.output_dir, 
@@ -127,7 +139,8 @@ class JapaneseOCR:
             json.dump(all_text_data, f, ensure_ascii=False, indent=2)
         
         logging.getLogger(__name__).info(f"Saved structured text to {output_json}")
-        return all_text_data
+        # Final yield to signal completion
+        yield f"Completed processing {total_pages} pages"
 
 # Usage
 # ocr = JapaneseOCR()
