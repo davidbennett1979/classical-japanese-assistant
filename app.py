@@ -20,6 +20,7 @@ db_manager = DatabaseManager()
 # Session-based stop events to prevent interference between users
 session_stop_events = {}
 session_last_used = {}
+last_sources = []  # Stores last retrieved sources for Source Viewer
 
 def _cleanup_expired_sessions():
     """Remove session events that haven't been used for a while."""
@@ -38,6 +39,7 @@ def get_available_prompts():
 
 def chat_function(message, history, show_thinking_enabled=True, session_id=None):
     """Main chat interface with streaming support - returns multiple outputs for different UI components"""
+    global last_sources
     # Create or get session-specific stop event
     if session_id is None:
         session_id = str(uuid.uuid4())
@@ -123,6 +125,19 @@ def chat_function(message, history, show_thinking_enabled=True, session_id=None)
                 is_thinking_model = chunk.get('is_thinking_model', False)
                 if is_thinking_model:
                     model_info += " 💭 *(Reasoning Model)*"
+                # Show short markers for sources if available
+                if 'sources' in chunk and chunk['sources']:
+                    try:
+                        pages = []
+                        for i, s in enumerate(chunk['sources'][:5], 1):
+                            pg = s.get('metadata', {}).get('page', 'N/A')
+                            pages.append(f"[{i}:p{pg}]")
+                        if pages:
+                            model_info += " | Sources: " + " ".join(pages)
+                        # Update global last_sources for viewer
+                        last_sources = chunk['sources']
+                    except Exception:
+                        pass
                 continue
             
             # Handle final chunk with sources (may not have token)
@@ -132,6 +147,11 @@ def chat_function(message, history, show_thinking_enabled=True, session_id=None)
                     source_text = source['metadata'].get('source', 'unknown')
                     page = source['metadata'].get('page', 'N/A')
                     sources_text += f"- [{i+1}] {source_text}, Page {page}\n"
+                # Update last_sources at completion too
+                try:
+                    last_sources = chunk['sources']
+                except Exception:
+                    pass
                 
                 # Update final message with sources for both model types
                 if is_thinking_model and answer_text:
@@ -212,7 +232,7 @@ def chat_function(message, history, show_thinking_enabled=True, session_id=None)
                     # Stream to chatbot, hide thinking components
                     yield (
                         history,  # [0] chatbot - gets real-time streaming
-                        gr.update(value="", visible=False),  # [1] model_display (hidden)
+                        gr.update(value=model_info, visible=True),  # [1] model_display now used for sources too
                         gr.update(value=""),  # [2] thinking_content (empty)
                         gr.update(visible=False),  # [3] thinking_accordion (hidden)
                         gr.update()   # [4] show_thinking checkbox
@@ -258,16 +278,37 @@ def add_note_function(note_text, topic):
     vector_store.add_note(note_text, topic)
     return "Note added successfully!"
 
-def process_new_document(file):
+def process_new_document(file, start_page=None, end_page=None, resume_from_json=True):
     """Process uploaded PDF or image with progress updates"""
     import glob
     from pdf2image import convert_from_path
     
     if file.name.endswith('.pdf'):
+        # If resume requested and existing JSON found, import it directly
+        json_path = os.path.join('processed_docs', os.path.basename(file.name) + '.json')
+        if resume_from_json and os.path.exists(json_path):
+            try:
+                import json as _json
+                yield f"📥 Found existing JSON. Importing {os.path.basename(json_path)}..."
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = _json.load(f)
+                chunks = vector_store.chunk_text(data)
+                yield f"💾 Adding {len(chunks):,} chunks to vector database..."
+                vector_store.add_documents(chunks)
+                final_count = vector_store.collection.count()
+                return f"✅ Imported JSON successfully! Added {len(chunks):,} chunks. Total: {final_count:,}"
+            except Exception as e:
+                yield f"❌ Failed to import existing JSON: {e}. Falling back to OCR..."
+
         # First, get page count for accurate progress
         try:
             yield "📄 Analyzing PDF structure..."
-            images = convert_from_path(file.name, 300)
+            kwargs = {}
+            if start_page:
+                kwargs['first_page'] = int(start_page)
+            if end_page:
+                kwargs['last_page'] = int(end_page)
+            images = convert_from_path(file.name, 300, **kwargs)
             total_pages = len(images)
             yield f"📄 Found {total_pages} pages. Starting OCR processing..."
             
@@ -306,7 +347,7 @@ def process_new_document(file):
             yield f"📄 PDF processing failed, trying with lower quality..."
             created_png_files = []  # Initialize in case first try failed
             try:
-                images = convert_from_path(file.name, 150)  # Lower DPI
+                images = convert_from_path(file.name, 150, **kwargs)  # Lower DPI
                 processed_chunks = []
                 for i, image in enumerate(images, 1):
                     page_path = f"processed_docs/page_{i:04d}.png"
@@ -322,6 +363,16 @@ def process_new_document(file):
                 yield f"❌ PDF processing failed completely. Error: {str(pdf_error)}"
                 return
         
+        # Save structured JSON for resume/import
+        try:
+            import json as _json
+            os.makedirs('processed_docs', exist_ok=True)
+            with open(json_path, 'w', encoding='utf-8') as f:
+                _json.dump(processed_chunks, f, ensure_ascii=False)
+            yield f"💾 Saved OCR JSON to {os.path.basename(json_path)}"
+        except Exception as e:
+            yield f"⚠️ Warning: Failed to save JSON: {e}"
+
         # Convert to vector store format using chunker for consistency
         chunks = vector_store.chunk_text(processed_chunks)
     else:
@@ -466,6 +517,38 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         )
         with thinking_accordion:
             thinking_content = gr.Markdown("", elem_id="thinking-content")
+
+        # Sources viewer panel
+        sources_accordion = gr.Accordion(
+            "🔎 Sources (Last Response)",
+            open=False,
+            visible=True
+        )
+        with sources_accordion:
+            with gr.Row():
+                refresh_sources_btn = gr.Button("Refresh Sources", variant="secondary")
+            sources_md = gr.Markdown("No sources yet. Ask a question to populate.")
+        
+        def format_sources_markdown():
+            """Format the global last_sources into a readable Markdown list"""
+            global last_sources
+            if not last_sources:
+                return "No sources yet. Ask a question to populate."
+            lines = ["**Sources for last answer:**"]
+            try:
+                for i, s in enumerate(last_sources, 1):
+                    meta = s.get('metadata', {})
+                    src = meta.get('source', 'unknown')
+                    page = meta.get('page', 'N/A')
+                    snippet = (s.get('text') or '')
+                    if len(snippet) > 120:
+                        snippet = snippet[:117] + '...'
+                    lines.append(f"- [{i}] {src} (p. {page})\n  \n  > {snippet}")
+            except Exception as e:
+                return f"⚠️ Could not render sources: {e}"
+            return "\n".join(lines)
+
+        refresh_sources_btn.click(lambda: format_sources_markdown(), None, sources_md)
         
         # Answer section for thinking models - COMPLETELY DISABLED for testing
         # answer_section = gr.Markdown("", visible=False, label="Answer")
@@ -691,10 +774,20 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
             label="Upload PDF or Image",
             file_types=[".pdf", ".jpg", ".png"]
         )
+        with gr.Row():
+            start_page_in = gr.Number(label="Start Page", value=None)
+            end_page_in = gr.Number(label="End Page", value=None)
+        resume_chk = gr.Checkbox(label="Import from existing JSON if present", value=True,
+                                 info="If a matching JSON exists in processed_docs, skip OCR and import it")
         process_btn = gr.Button("Process Document")
         process_output = gr.Textbox(label="Processing Status")
         
-        process_btn.click(process_new_document, file_input, process_output)
+        def process_new_document_wrapper(file, start_page, end_page, resume):
+            # Wrapper to pass extra parameters
+            for update in process_new_document(file, start_page=start_page, end_page=end_page, resume_from_json=resume):
+                yield update
+        
+        process_btn.click(process_new_document_wrapper, [file_input, start_page_in, end_page_in, resume_chk], process_output)
     
     with gr.Tab("Database"):
         gr.Markdown("### 🗄️ Database Management")
@@ -732,6 +825,101 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
                 delete_pngs_btn = gr.Button("🗑️ Delete PNG Files", variant="stop")
                 png_delete_status = gr.Textbox(label="PNG Deletion Status", interactive=False)
         
+        # Orphaned JSON import
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### 📥 Import Orphaned JSON Files")
+                gr.Markdown("Scan for processed JSON files not in the database and import them.")
+                scan_json_btn = gr.Button("Scan for JSON Files")
+                json_list = gr.CheckboxGroup(label="Found JSON Files (select to import)")
+                import_selected_btn = gr.Button("Import Selected JSON", variant="primary")
+                import_all_btn = gr.Button("Import All JSON", variant="secondary")
+                import_status = gr.Textbox(label="Import Status", interactive=False)
+
+                def scan_orphaned_json():
+                    import glob, json
+                    files = sorted(glob.glob('processed_docs/*.json'))
+                    orphaned = []
+                    for f in files:
+                        name = os.path.basename(f)
+                        # Heuristic: count docs with this source
+                        try:
+                            count = db_manager.vector_store.collection.count(where={"source": name})
+                        except Exception:
+                            count = 0
+                        if count == 0:
+                            orphaned.append(name)
+                    return gr.update(choices=orphaned, value=[])
+
+                def import_json_files(selected):
+                    import json
+                    if not selected:
+                        return "No files selected"
+                    total_added = 0
+                    for name in selected:
+                        path = os.path.join('processed_docs', name)
+                        try:
+                            with open(path, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            # Convert into vector_store format and add
+                            chunks = vector_store.chunk_text(data)
+                            vector_store.add_documents(chunks)
+                            total_added += len(chunks)
+                        except Exception as e:
+                            return f"❌ Failed on {name}: {e}"
+                    return f"✅ Imported {len(selected)} JSON files, added ~{total_added:,} chunks"
+
+                scan_json_btn.click(scan_orphaned_json, None, json_list)
+                import_selected_btn.click(import_json_files, json_list, import_status)
+                import_all_btn.click(lambda choices: choices, json_list, json_list).then(import_json_files, json_list, import_status)
+
+        # Backups
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### 💾 Backups")
+                gr.Markdown("Create and restore backups of the Chroma database.")
+                create_backup_btn = gr.Button("Create Backup Archive")
+                backup_file = gr.File(label="Download Backup", interactive=False)
+                list_backups_btn = gr.Button("List Backups")
+                backups_dropdown = gr.Dropdown(label="Available Backups", choices=[])
+                restore_confirm = gr.Textbox(label="Confirmation", placeholder="Type RESTORE to confirm")
+                restore_btn = gr.Button("Restore Selected Backup", variant="stop")
+                restore_status = gr.Textbox(label="Restore Status", interactive=False)
+
+                def create_backup():
+                    import os, shutil, datetime
+                    os.makedirs('backups', exist_ok=True)
+                    ts = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+                    base = os.path.join('backups', f'chroma_db-{ts}')
+                    archive = shutil.make_archive(base, 'zip', root_dir='.', base_dir='chroma_db')
+                    return archive
+
+                def list_backups():
+                    import glob
+                    files = sorted(glob.glob('backups/chroma_db-*.zip'))
+                    return gr.update(choices=files, value=files[-1] if files else None)
+
+                def restore_backup(path, confirm):
+                    import shutil
+                    import os
+                    if not path:
+                        return "Select a backup first"
+                    if confirm != 'RESTORE':
+                        return "Type RESTORE to confirm"
+                    try:
+                        # Remove existing DB (dangerous) then extract
+                        if os.path.exists('chroma_db'):
+                            shutil.rmtree('chroma_db')
+                        os.makedirs('chroma_db', exist_ok=True)
+                        shutil.unpack_archive(path, '.')
+                        return "✅ Restored backup successfully. Restart app to reload DB."
+                    except Exception as e:
+                        return f"❌ Restore failed: {e}"
+
+                create_backup_btn.click(create_backup, None, backup_file)
+                list_backups_btn.click(list_backups, None, backups_dropdown)
+                restore_btn.click(restore_backup, [backups_dropdown, restore_confirm], restore_status)
+
         # Delete textbook section  
         with gr.Row():
             with gr.Column():

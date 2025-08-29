@@ -254,11 +254,12 @@ Provide a clear, educational response with citations."""
             in_thinking = False
             thinking_started = False
             
-            # First yield model information
+            # First yield model information (include sources for early UI display)
             yield {
                 'model_name': self.model_name,
                 'is_thinking_model': is_thinking,
                 'type': 'model_info',
+                'sources': context,
                 'done': False
             }
             
