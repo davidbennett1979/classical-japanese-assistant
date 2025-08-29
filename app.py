@@ -916,6 +916,71 @@ with gr.Blocks(
                     import_selected_btn.click(import_json_files, json_list, import_status)
                     import_all_btn.click(lambda choices: choices, json_list, json_list).then(import_json_files, json_list, import_status)
         
+        # New dedicated Model tab
+        with gr.Tab("🧠 モデル • Model"):
+            gr.Markdown("### 🤖 モデル設定 • Model Settings")
+
+            def get_installed_models():
+                """Get list of installed Ollama models"""
+                try:
+                    import subprocess
+                    result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+                    if result.returncode == 0:
+                        lines = result.stdout.strip().split('\n')
+                        if len(lines) > 1:
+                            models = []
+                            for line in lines[1:]:
+                                if line.strip():
+                                    parts = line.strip().split()
+                                    if parts:
+                                        models.append(parts[0])
+                            return models if models else []
+                    return []
+                except Exception as e:
+                    logging.getLogger(__name__).warning(f"Error getting models: {e}")
+                    return []
+
+            installed_models = get_installed_models()
+            current_model = assistant.model_name if assistant.model_name in installed_models else (installed_models[0] if installed_models else None)
+
+            model_dropdown = gr.Dropdown(
+                choices=installed_models,
+                value=current_model,
+                label="モデル選択 • Select Model",
+                info="インストール済みのOllamaモデルから選択 • Choose from installed Ollama models",
+                elem_classes=["enhanced-dropdown"]
+            )
+
+            def switch_model(model_name):
+                assistant.model_name = model_name
+                return f"モデルを切り替えました • Switched to model: {model_name}"
+
+            model_status = gr.Textbox(
+                label="モデル状態 • Model Status",
+                value=f"現在のモデル • Current: {assistant.model_name}",
+                interactive=False,
+                elem_classes=["status-display"]
+            )
+
+            model_dropdown.change(switch_model, model_dropdown, model_status)
+
+            refresh_models_btn = gr.Button(
+                "🔄 モデルリスト更新 • Refresh Model List",
+                elem_classes=["btn-secondary"]
+            )
+
+            def refresh_models():
+                models = get_installed_models()
+                if not models:
+                    return gr.update(choices=[], value=None), "モデルが見つかりません • No models found. Please install Ollama models."
+                current_value = assistant.model_name if assistant.model_name in models else models[0]
+                return (
+                    gr.update(choices=models, value=current_value),
+                    f"{len(models)} モデルが見つかりました • Found {len(models)} installed models: {', '.join(models)}"
+                )
+
+            refresh_models_btn.click(refresh_models, None, [model_dropdown, model_status])
+
         # System & Settings
         with gr.Tab("⚙️ システム • System"):
             
@@ -1074,41 +1139,6 @@ with gr.Blocks(
             
             gr.Markdown("---")
             
-            # Model Settings
-            gr.Markdown("### 🤖 モデル設定 • Model Settings")
-            
-            def get_installed_models():
-                """Get list of installed Ollama models"""
-                try:
-                    import subprocess
-                    result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
-                    if result.returncode == 0:
-                        lines = result.stdout.strip().split('\n')
-                        if len(lines) > 1:
-                            models = []
-                            for line in lines[1:]:
-                                if line.strip():
-                                    parts = line.strip().split()
-                                    if parts:
-                                        models.append(parts[0])
-                            return models if models else []
-                    return []
-                except Exception as e:
-                    logging.getLogger(__name__).warning(f"Error getting models: {e}")
-                    return []
-            
-            installed_models = get_installed_models()
-            current_model = assistant.model_name if assistant.model_name in installed_models else (installed_models[0] if installed_models else None)
-            
-            model_dropdown = gr.Dropdown(
-                choices=installed_models,
-                value=current_model,
-                label="モデル選択 • Select Model",
-                info="インストール済みのOllamaモデルから選択 • Choose from installed Ollama models",
-                elem_classes=["enhanced-dropdown"]
-            )
-
-            gr.Markdown("---")
             # Dictionary Loader
             gr.Markdown("### 📚 辞書設定 • Dictionary Settings")
             gr.Markdown("ローカル辞書(JSON)を読み込み、チャットで語彙検索ができます • Load a local JSON dictionary for lookups in Chat.")
