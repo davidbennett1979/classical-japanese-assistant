@@ -7,6 +7,8 @@ from typing import List, Dict
 import hashlib
 import logging
 from config import settings
+import unicodedata
+import re
 
 class JapaneseVectorStore:
     def __init__(self, persist_directory: str | None = None):
@@ -36,7 +38,7 @@ class JapaneseVectorStore:
         chunks = []
         
         for item in text_data:
-            text = item['text']
+            text = self._normalize_text(item['text'])
             
             # For short texts, keep as single chunk
             if len(text) <= chunk_size:
@@ -51,7 +53,7 @@ class JapaneseVectorStore:
                 })
             else:
                 # Split longer texts at sentence boundaries
-                sentences = text.replace('。', '。|').split('|')
+                sentences = text.replace('。', '。|').replace('\n', '|').split('|')
                 current_chunk = ""
                 
                 for sentence in sentences:
@@ -82,6 +84,17 @@ class JapaneseVectorStore:
                     })
         
         return chunks
+
+    def _normalize_text(self, text: str) -> str:
+        """Apply Unicode normalization and whitespace cleanup for Japanese text."""
+        if not isinstance(text, str):
+            text = str(text)
+        # NFKC normalization
+        text = unicodedata.normalize('NFKC', text)
+        # Normalize whitespace (collapse multiple spaces) but keep Japanese punctuation
+        text = re.sub(r"[ \t\u3000]+", " ", text)
+        # Strip outer whitespace
+        return text.strip()
     
     def sanitize_metadata(self, metadata: Dict) -> Dict:
         """Ensure metadata only contains simple types that ChromaDB accepts"""
@@ -110,7 +123,7 @@ class JapaneseVectorStore:
         if not documents:
             return
         
-        texts = [doc['text'] for doc in documents]
+        texts = [self._normalize_text(doc['text']) for doc in documents]
         # Sanitize metadata to ensure ChromaDB compatibility
         metadatas = [self.sanitize_metadata(doc['metadata']) for doc in documents]
 
@@ -152,7 +165,8 @@ class JapaneseVectorStore:
     
     def search(self, query: str, n_results: int = 5):
         """Search for relevant passages"""
-        query_embedding = self.embedder.encode([query]).tolist()
+        normalized_query = self._normalize_text(query)
+        query_embedding = self.embedder.encode([normalized_query]).tolist()
         
         results = self.collection.query(
             query_embeddings=query_embedding,
@@ -165,7 +179,7 @@ class JapaneseVectorStore:
     def add_note(self, note_text: str, related_topic: str = None):
         """Add personal notes to the vector store"""
         note_doc = {
-            'text': note_text,
+            'text': self._normalize_text(note_text),
             'metadata': {
                 'source': 'personal_notes',
                 'type': 'note',

@@ -27,9 +27,14 @@ class Settings:
     # OCR
     ocr_langs: str = os.getenv("OCR_LANGS", "jpn+eng")
     ocr_psm: str = os.getenv("OCR_PSM", "6")  # Page segmentation mode
+    ocr_min_conf: int = int(os.getenv("OCR_MIN_CONF", "50"))  # Minimum token confidence
 
     # Logging
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # App behavior
+    queue_concurrency: int = int(os.getenv("QUEUE_CONCURRENCY", "8"))
+    session_ttl_minutes: int = int(os.getenv("SESSION_TTL_MINUTES", "60"))
 
 
 settings = Settings()
@@ -45,4 +50,3 @@ def configure_logging():
 
 # Configure logging on import
 configure_logging()
-

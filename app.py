@@ -8,6 +8,7 @@ import glob
 import threading
 import logging
 import uuid
+import time
 from config import settings
 
 # Initialize components
@@ -18,6 +19,16 @@ db_manager = DatabaseManager()
 
 # Session-based stop events to prevent interference between users
 session_stop_events = {}
+session_last_used = {}
+
+def _cleanup_expired_sessions():
+    """Remove session events that haven't been used for a while."""
+    ttl = max(1, int(getattr(settings, 'session_ttl_minutes', 60))) * 60
+    now = time.time()
+    expired = [sid for sid, ts in session_last_used.items() if now - ts > ttl]
+    for sid in expired:
+        session_stop_events.pop(sid, None)
+        session_last_used.pop(sid, None)
 
 # Load available prompts dynamically
 def get_available_prompts():
@@ -31,11 +42,13 @@ def chat_function(message, history, show_thinking_enabled=True, session_id=None)
     if session_id is None:
         session_id = str(uuid.uuid4())
     
+    _cleanup_expired_sessions()
     if session_id not in session_stop_events:
         session_stop_events[session_id] = threading.Event()
     
     stop_event = session_stop_events[session_id]
     stop_event.clear()  # Reset stop flag
+    session_last_used[session_id] = time.time()
     
     
     history = history or []
@@ -63,6 +76,7 @@ def chat_function(message, history, show_thinking_enabled=True, session_id=None)
         
         # Stream the response
         for chunk in assistant.query_stream(message, stop_event=stop_event):
+            session_last_used[session_id] = time.time()
             # Check if stop was requested
             if stop_event.is_set():
                 if thinking_text:
@@ -905,8 +919,84 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         
         refresh_btn.click(update_stats, None, stats_box)
 
+        gr.Markdown("### Health Checks")
+        health_btn = gr.Button("Run Health Checks")
+        health_out = gr.Markdown("Click to run basic environment checks")
+
+        def run_health_checks():
+            messages = []
+            # Ollama
+            try:
+                import subprocess
+                r = subprocess.run(['ollama', 'list'], capture_output=True, text=True, timeout=10)
+                if r.returncode == 0:
+                    models = [ln.split()[0] for ln in r.stdout.strip().split('\n')[1:] if ln.strip()]
+                    messages.append(f"✅ Ollama reachable. Models: {', '.join(models) if models else 'none'}")
+                else:
+                    messages.append("❌ Ollama not responding to 'ollama list'")
+            except Exception as e:
+                messages.append(f"❌ Ollama check failed: {e}")
+            # Tesseract
+            try:
+                import pytesseract  # noqa: F401
+                import subprocess
+                langs = subprocess.run(['tesseract','--list-langs'], capture_output=True, text=True)
+                has_jpn = 'jpn' in langs.stdout
+                messages.append("✅ Tesseract installed" + (" with 'jpn'" if has_jpn else " (missing 'jpn' language)"))
+            except Exception as e:
+                messages.append(f"❌ Tesseract check failed: {e}")
+            # Chroma
+            try:
+                count = vector_store.collection.count()
+                messages.append(f"✅ ChromaDB OK. Documents: {count}")
+            except Exception as e:
+                messages.append(f"❌ ChromaDB check failed: {e}")
+            return "\n\n".join(messages)
+
+        health_btn.click(run_health_checks, None, health_out)
+
+        gr.Markdown("### OCR Settings")
+        with gr.Row():
+            ocr_langs = gr.Textbox(label="OCR Languages", value=settings.ocr_langs, info="e.g., jpn+eng")
+            ocr_psm = gr.Textbox(label="OCR PSM", value=str(settings.ocr_psm), info="Tesseract page segmentation mode")
+            ocr_min_conf = gr.Slider(label="Min Token Confidence", minimum=0, maximum=100, step=1, value=int(settings.ocr_min_conf))
+        save_ocr_btn = gr.Button("Save OCR Settings")
+        save_ocr_status = gr.Textbox(label="Status", interactive=False)
+
+        def _update_env_vars(updates: dict):
+            env_path = ".env"
+            existing = {}
+            if os.path.exists(env_path):
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if '=' in line and not line.strip().startswith('#'):
+                            k, v = line.strip().split('=', 1)
+                            existing[k] = v
+            existing.update({k: str(v) for k, v in updates.items()})
+            with open(env_path, 'w', encoding='utf-8') as f:
+                for k, v in existing.items():
+                    f.write(f"{k}={v}\n")
+
+        def save_ocr_settings(langs, psm, min_conf):
+            # Update in-memory settings
+            settings.ocr_langs = langs.strip() or settings.ocr_langs
+            settings.ocr_psm = str(psm).strip() or settings.ocr_psm
+            settings.ocr_min_conf = int(min_conf)
+            # Persist to .env
+            try:
+                _update_env_vars({
+                    'OCR_LANGS': settings.ocr_langs,
+                    'OCR_PSM': settings.ocr_psm,
+                    'OCR_MIN_CONF': settings.ocr_min_conf,
+                })
+                return "Saved OCR settings to .env"
+            except Exception as e:
+                return f"Failed to save: {e}"
+
+        save_ocr_btn.click(save_ocr_settings, inputs=[ocr_langs, ocr_psm, ocr_min_conf], outputs=[save_ocr_status])
+
 # Launch the app
 if __name__ == "__main__":
-    app.queue()  # Enable queuing for streaming
+    app.queue(concurrency_count=getattr(settings, 'queue_concurrency', 8))  # Enable queuing for streaming
     # Bind host/port from settings with a safer default host
     app.launch(server_name=settings.gradio_host, server_port=settings.gradio_port, share=False)

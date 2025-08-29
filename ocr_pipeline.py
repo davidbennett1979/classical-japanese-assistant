@@ -57,8 +57,17 @@ class JapaneseOCR:
         current_paragraph = []
         last_y = 0
         
+        min_conf = int(settings.ocr_min_conf)
+        token_buffer = []
         for i in range(len(data['text'])):
-            if data['text'][i].strip():
+            token = data['text'][i]
+            if token and token.strip():
+                try:
+                    conf_val = int(float(data.get('conf', ['-1'])[i]))
+                except Exception:
+                    conf_val = -1
+                if conf_val >= min_conf:
+                    token_buffer.append(token.strip())
                 x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
                 
                 # Detect paragraph breaks
@@ -72,7 +81,9 @@ class JapaneseOCR:
                         })
                         current_paragraph = []
                 
-                current_paragraph.append(data['text'][i])
+                if token_buffer:
+                    current_paragraph.append(' '.join(token_buffer))
+                    token_buffer = []
                 last_y = y
         
         # Add last paragraph
