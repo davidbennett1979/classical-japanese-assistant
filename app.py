@@ -872,7 +872,7 @@ with gr.Blocks(
                             for source, count in stats['textbooks'].items():
                                 textbook_list.append(f"📚 **{source}**: {count:,} chunks")
                             
-                            textbook_info = "\\n".join(textbook_list)
+                            textbook_info = "\n".join(textbook_list)
                             
                             summary = f"""## データベース概要 • Database Overview
 **総文書数 • Total Documents**: {stats['total_documents']:,} chunks
@@ -1116,7 +1116,7 @@ with gr.Blocks(
                         textbook_list.append(f"• **{source}**: {count:,} chunks")
                     
                     if textbook_list:
-                        textbook_info = "\\n".join(textbook_list)
+                        textbook_info = "\n".join(textbook_list)
                         docs_display = f"""**📚 総文書数 • Total Documents**
 
 **{stats['total_documents']:,}** total chunks
