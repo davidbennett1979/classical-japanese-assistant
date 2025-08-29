@@ -69,12 +69,27 @@ def create_enhanced_chat_interface(
             elem_classes=["thinking-content", "monospace-japanese"]
         )
     
-    # Show/Hide thinking toggle with Japanese text
-    show_thinking = gr.Checkbox(
-        label="思考過程を表示 • Show thinking process",
-        value=True,
-        elem_classes=["japanese-checkbox"]
-    )
+    # Knowledge source selector
+    with gr.Row():
+        with gr.Column(scale=1):
+            knowledge_mode = gr.Radio(
+                choices=[
+                    ("🤖 自動 • Auto", "auto"),
+                    ("📚 教科書 • Textbook", "RAG"),
+                    ("🧠 モデル • Model", "GENERAL"),
+                    ("🔄 混合 • Hybrid", "HYBRID")
+                ],
+                value="auto",
+                label="💡 知識ソース • Knowledge Source",
+                elem_classes=["knowledge-selector", "compact-radio"]
+            )
+        with gr.Column(scale=1):
+            # Show/Hide thinking toggle with Japanese text
+            show_thinking = gr.Checkbox(
+                label="思考過程を表示 • Show thinking process",
+                value=True,
+                elem_classes=["japanese-checkbox"]
+            )
     
     # Model status with enhanced design
     model_display = gr.Markdown(
@@ -95,6 +110,7 @@ def create_enhanced_chat_interface(
         'thinking_accordion': thinking_accordion,
         'thinking_content': thinking_content,
         'show_thinking': show_thinking,
+        'knowledge_mode': knowledge_mode,
         'model_display': model_display,
         'session_id_state': session_id_state
     }

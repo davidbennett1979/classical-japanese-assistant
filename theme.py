@@ -527,4 +527,35 @@ def get_seasonal_css(season="sakura"):
     .seasonal-button {{
         background: linear-gradient(135deg, var(--seasonal-primary), var(--seasonal-secondary));
     }}
+    
+    /* Knowledge selector styles */
+    .knowledge-selector .gradio-radio {{
+        background: var(--surface-color);
+        border: 1px solid var(--border-color);
+        border-radius: var(--border-radius);
+        padding: 0.75rem;
+    }}
+    
+    .knowledge-selector .gradio-radio label {{
+        color: var(--text-primary);
+        font-size: 13px;
+        margin: 4px 0;
+        cursor: pointer;
+    }}
+    
+    .knowledge-selector .gradio-radio input[type="radio"]:checked + label {{
+        color: var(--primary-color);
+        font-weight: 600;
+    }}
+    
+    .compact-radio {{
+        max-height: 140px;
+        overflow-y: auto;
+    }}
+    
+    /* Radio button styling */
+    .knowledge-selector input[type="radio"] {{
+        accent-color: var(--primary-color);
+        margin-right: 8px;
+    }}
     """

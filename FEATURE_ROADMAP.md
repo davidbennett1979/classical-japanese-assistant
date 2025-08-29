@@ -50,6 +50,32 @@ Transform this from a basic RAG assistant into the ultimate Classical Japanese l
 - **Impact: VERY HIGH** - Unlocks model's deep classical Japanese training while maintaining textbook accuracy
 - **Implementation Plan**: 4-phase rollout with question classification, routing engine, hybrid prompts, and enhanced UI
 
+#### Decision Matrix (Routing)
+- **RAG**: Strong textbook hits (Top‑K density high, avg distance ≤ τ) and question is grammar/meta → cite textbooks only.
+- **LLM General**: Low textbook hits and question requests literature/examples beyond textbooks → allow general knowledge with clear “General” banner, no textbook citations.
+- **Hybrid**: Medium textbook hits or mixed query → combine RAG + general; clearly separate and label each.
+
+#### Guardrails
+- Prefer textbook content; do not attach textbook citations to claims derived from general knowledge.
+- Label and separate “General Knowledge” content from “Textbook‑grounded” content in the answer.
+- Refuse or minimize out‑of‑scope requests when both RAG and general signals are weak; ask for clarifying context.
+
+#### Metrics & Thresholds (Tunable)
+- Hit density: fraction of Top‑K with distance ≤ 0.40 (start), adjustable via settings.
+- Diversity: distinct sources among Top‑K (≥ 2 preferred for high confidence).
+- Router confidence: simple score from density + diversity; shown in UI header.
+
+#### Evaluation
+- Log route decision, hit metrics, knowledge mix (e.g., “Textbook 80% / General 20%”).
+- Collect thumbs up/down and brief reason; compare by route.
+- A/B against RAG‑only baseline to tune thresholds.
+
+#### Phase Breakdown
+1) Classifier + Signals: keyword heuristics + retrieval metrics produce route + confidence.
+2) Routing + Guardrails: enforce output policy (citations only for textbook claims; “General” banner for others).
+3) Hybrid Prompt & UI: prompt sections (Retrieved Context, General Knowledge, Synthesis Policy) and header indicator “Source Mode: RAG | General | Hybrid”.
+4) Quality Loop: telemetry, user feedback, threshold tuning and documentation.
+
 ### 1. **Interactive Sentence Parser** 
 - Click any sentence to see grammatical breakdown
 - Color-coded particles, verbs, auxiliaries

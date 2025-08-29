@@ -27,6 +27,7 @@ current_season = "sakura"
 session_stop_events = {}
 session_last_used = {}
 last_sources = []
+dictionary_entries = []  # Loaded dictionary entries for lookup
 
 def _cleanup_expired_sessions():
     """Remove session events that haven't been used for a while."""
@@ -42,8 +43,8 @@ def get_available_prompts():
     prompt_files = glob.glob("prompts/*.md")
     return sorted(prompt_files) if prompt_files else ["prompts/classical_japanese_tutor.md"]
 
-def enhanced_chat_function(message, history, show_thinking_enabled=True, session_id=None):
-    """Enhanced chat interface with streaming support"""
+def enhanced_chat_function(message, history, show_thinking_enabled=True, knowledge_mode="auto", session_id=None):
+    """Enhanced chat interface with streaming support and knowledge source selection"""
     global last_sources
     
     if session_id is None:
@@ -81,9 +82,10 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, session
         answer_text = ""
         sources_text = ""
         is_thinking_model = False
+        stream_start_ts = time.time()
         
-        # Stream the response with enhanced formatting
-        for chunk in assistant.query_stream(message, stop_event=stop_event):
+        # Stream the response with enhanced formatting using hybrid system
+        for chunk in assistant.query_hybrid_stream(message, knowledge_mode=knowledge_mode, stop_event=stop_event):
             session_last_used[session_id] = time.time()
             
             if stop_event.is_set():
@@ -116,27 +118,52 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, session
             if chunk.get('type') == 'model_info':
                 is_thinking_model = chunk.get('is_thinking_model', False)
                 has_sources = chunk.get('sources') and len(chunk.get('sources', [])) > 0
+                route = chunk.get('route', 'AUTO')
+                confidence = chunk.get('confidence', 0.0)
                 
-                if has_sources:
-                    model_info = f"🤖 モデル: **{assistant.model_name}** {'(推論モデル • Reasoning Model)' if is_thinking_model else ''}\n📚 ソース: 教科書の知識を使用 • Using textbook knowledge"
-                else:
-                    model_info = f"🤖 モデル: **{assistant.model_name}** {'(推論モデル • Reasoning Model)' if is_thinking_model else ''}\n🧠 ソース: モデルの一般知識を使用 • Using model's general knowledge"
+                # Enhanced model info with routing information
+                route_emojis = {
+                    'RAG': '📚',
+                    'GENERAL': '🧠', 
+                    'HYBRID': '🔄',
+                    'AUTO': '🤖'
+                }
+                
+                route_descriptions = {
+                    'RAG': '教科書のみ • Textbook Only',
+                    'GENERAL': 'モデル知識のみ • Model Knowledge Only',
+                    'HYBRID': '教科書+モデル知識 • Textbook + Model Knowledge',
+                    'AUTO': '自動選択 • Auto-Selected'
+                }
+                
+                route_emoji = route_emojis.get(route, '🤖')
+                route_desc = route_descriptions.get(route, 'Unknown')
+                
+                model_info = f"🤖 モデル: **{assistant.model_name}** {'(推論モデル • Reasoning Model)' if is_thinking_model else ''}\n"
+                model_info += f"{route_emoji} **知識ソース • Knowledge Source:** {route_desc}"
+                
+                if confidence > 0:
+                    model_info += f" (信頼度 • Confidence: {confidence:.1%})"
                 
                 if chunk.get('sources'):
                     last_sources = chunk['sources']
             
             elif chunk.get('type') == 'thinking' and chunk.get('token'):
                 thinking_text += chunk['token']
+                elapsed = time.time() - stream_start_ts
+                metrics_line = f"⏱ {elapsed:.1f}s • 思考 {len(thinking_text)} 文字"
                 yield (
                     history,
                     gr.update(value=model_info, visible=bool(model_info)),
-                    gr.update(value=thinking_text),
+                    gr.update(value=f"{metrics_line}\n\n" + thinking_text),
                     gr.update(visible=show_thinking_enabled and is_thinking_model),
                     gr.update(visible=True)
                 )
             
             elif chunk.get('type') == 'answer' and chunk.get('token'):
                 answer_text += chunk['token']
+                elapsed = time.time() - stream_start_ts
+                metrics_line = f"⏱ {elapsed:.1f}s • 思考 {len(thinking_text)} 文字 • 応答 {len(answer_text)} 文字"
                 
                 if len(history) > 0 and history[-1]["role"] == "assistant":
                     history[-1]["content"] = answer_text
@@ -146,7 +173,7 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, session
                 yield (
                     history,
                     gr.update(value=model_info, visible=bool(model_info)),
-                    gr.update(value=thinking_text),
+                    gr.update(value=f"{metrics_line}\n\n" + thinking_text),
                     gr.update(visible=show_thinking_enabled and is_thinking_model and bool(thinking_text)),
                     gr.update(visible=True)
                 )
@@ -156,10 +183,12 @@ def enhanced_chat_function(message, history, show_thinking_enabled=True, session
                 if chunk.get('sources') and not last_sources:
                     last_sources = chunk['sources']
                 
+                elapsed = time.time() - stream_start_ts
+                metrics_line = f"⏱ {elapsed:.1f}s • 思考 {len(thinking_text)} 文字 • 応答 {len(answer_text)} 文字"
                 yield (
                     history,
                     gr.update(value="", visible=False),
-                    gr.update(value=thinking_text),
+                    gr.update(value=f"{metrics_line}\n\n" + thinking_text if thinking_text else ""),
                     gr.update(visible=show_thinking_enabled and is_thinking_model and bool(thinking_text)),
                     gr.update(visible=False)
                 )
@@ -379,9 +408,14 @@ with gr.Blocks(
                     parser_components = create_sentence_parser_section()
 
                     def analyze_sentence(sentence):
-                        """Analyze a Classical Japanese sentence using passage analysis prompt"""
+                        """Analyze a Classical Japanese sentence using passage analysis prompt (with immediate feedback)"""
                         if not sentence or not sentence.strip():
-                            return "入力された文がありません • Please enter a sentence."
+                            yield "入力された文がありません • Please enter a sentence."
+                            return
+                        if not assistant.model_name:
+                            yield "❌ モデル未選択 • No model selected in Settings."
+                            return
+                        yield "🧠 解析中… • Analyzing…"
                         # Temporarily switch to passage analysis prompt
                         original_prompt = assistant.prompt_template
                         passage_prompt = 'prompts/passage_analysis.md'
@@ -389,17 +423,65 @@ with gr.Blocks(
                             if os.path.exists(passage_prompt):
                                 assistant.prompt_template = assistant.load_prompt_template(passage_prompt)
                             result = assistant.translate_passage(sentence)
-                            return result.get('answer', 'No analysis produced.')
+                            yield result.get('answer', 'No analysis produced.')
                         except Exception as e:
-                            return f"❌ 解析中にエラー • Error during analysis: {e}"
+                            yield f"❌ 解析中にエラー • Error during analysis: {e}"
                         finally:
                             assistant.prompt_template = original_prompt
 
                     parser_components['analyze_btn'].click(
                         analyze_sentence,
                         inputs=[parser_components['sentence_input']],
-                        outputs=[parser_components['parser_output']]
+                        outputs=[parser_components['parser_output']],
+                        show_progress="minimal"
                     )
+
+                    # Dictionary lookup (click-to-lookup)
+                    gr.Markdown("---")
+                    gr.Markdown("### 📚 語彙検索 • Dictionary Lookup")
+                    lookup_input = gr.Textbox(
+                        label="語 • Term",
+                        placeholder="語や表現を入力 • Enter a term",
+                        elem_classes=["enhanced-input"]
+                    )
+                    lookup_btn = gr.Button("検索 • Lookup", variant="secondary")
+                    lookup_out = gr.Markdown(elem_classes=["explanation-card"]) 
+
+                    def lookup_term(term):
+                        import unicodedata
+                        term = (term or "").strip()
+                        if not term:
+                            return "入力がありません • Please enter a term."
+                        if not dictionary_entries:
+                            return "辞書が読み込まれていません • No dictionary loaded in Settings."
+                        q = unicodedata.normalize('NFKC', term)
+                        results = []
+                        for e in dictionary_entries:
+                            hw = e.get('headword') or e.get('term') or e.get('word') or ''
+                            rd = e.get('reading') or e.get('yomi') or ''
+                            gl = e.get('gloss') or e.get('definition') or e.get('def') or e.get('meaning') or ''
+                            if any(q in unicodedata.normalize('NFKC', str(x)) for x in (hw, rd, gl)):
+                                results.append((hw, rd, gl, e))
+                            if len(results) >= 20:
+                                break
+                        if not results:
+                            return f"該当なし • No matches for: {term}"
+                        lines = [f"**🔎 {term} — {len(results)} 件 • matches**\n"]
+                        for i, (hw, rd, gl, e) in enumerate(results, 1):
+                            pos = e.get('pos') or e.get('品詞') or ''
+                            src = e.get('source') or ''
+                            line = f"**{i}. {hw}** "
+                            if rd:
+                                line += f"({rd}) "
+                            if pos:
+                                line += f"[{pos}] "
+                            line += "\n- " + str(gl)
+                            if src:
+                                line += "\n  _" + str(src) + "_"
+                            lines.append(line)
+                        return "\n\n".join(lines)
+
+                    lookup_btn.click(lookup_term, inputs=[lookup_input], outputs=[lookup_out], show_progress="minimal")
                     
                     # Chat event handlers
                     submit_event = chat_components['msg'].submit(
@@ -408,6 +490,7 @@ with gr.Blocks(
                             chat_components['msg'],
                             chat_components['chatbot'],
                             chat_components['show_thinking'],
+                            chat_components['knowledge_mode'],
                             chat_components['session_id_state']
                         ],
                         outputs,
@@ -424,6 +507,7 @@ with gr.Blocks(
                             chat_components['msg'],
                             chat_components['chatbot'],
                             chat_components['show_thinking'],
+                            chat_components['knowledge_mode'],
                             chat_components['session_id_state']
                         ],
                         outputs,
@@ -856,13 +940,13 @@ with gr.Blocks(
                     else:
                         docs_display = "**📚 総文書数 • Total Documents**\n\nNo documents in database"
                     
-                    # Simple time tracking placeholder
-                    time_display = "**⏰ 学習時間 • Study Time**\n\nToday: 0 min\nTotal: 0 min"
+                    # Routing statistics
+                    routing_display = get_routing_stats_display()
                     
                     # Grammar points placeholder  
                     grammar_display = "**📖 文法項目 • Grammar Points**\n\nStudied: 0\nMastered: 0"
                     
-                    return docs_display, time_display, grammar_display
+                    return docs_display, routing_display, grammar_display
                 except Exception as e:
                     error_msg = f"**❌ Error**\n\n{str(e)}"
                     return error_msg, error_msg, error_msg
@@ -900,6 +984,35 @@ with gr.Blocks(
                     messages.append(f"❌ ChromaDB check failed: {e}")
                 
                 return "\\n\\n".join(messages)
+            
+            def get_routing_stats_display():
+                """Get hybrid knowledge system routing statistics"""
+                try:
+                    stats = assistant.get_routing_stats()
+                    if stats['total'] == 0:
+                        return "📊 **Knowledge Routing Statistics**\\n\\nNo queries processed yet."
+                    
+                    lines = [
+                        f"📊 **Knowledge Routing Statistics**\\n",
+                        f"**Total Queries**: {stats['total']}",
+                        f"**Average Confidence**: {stats['avg_confidence']:.1%}\\n",
+                        "**Route Distribution**:"
+                    ]
+                    
+                    route_emojis = {
+                        'RAG': '📚',
+                        'GENERAL': '🧠', 
+                        'HYBRID': '🔄'
+                    }
+                    
+                    for route, percentage in stats['route_percentages'].items():
+                        emoji = route_emojis.get(route, '❓')
+                        lines.append(f"- {emoji} **{route}**: {percentage:.1f}%")
+                    
+                    return "\\n".join(lines)
+                
+                except Exception as e:
+                    return f"❌ Routing stats error: {e}"
             
             def create_backup():
                 """Create database backup"""
@@ -975,6 +1088,45 @@ with gr.Blocks(
                 info="インストール済みのOllamaモデルから選択 • Choose from installed Ollama models",
                 elem_classes=["enhanced-dropdown"]
             )
+
+            gr.Markdown("---")
+            # Dictionary Loader
+            gr.Markdown("### 📚 辞書設定 • Dictionary Settings")
+            gr.Markdown("ローカル辞書(JSON)を読み込み、チャットで語彙検索ができます • Load a local JSON dictionary for lookups in Chat.")
+            dict_file = gr.File(label="辞書ファイル(JSON) • Dictionary JSON", file_types=[".json"])
+            load_dict_btn = gr.Button("📥 辞書読み込み • Load Dictionary", variant="secondary")
+            dict_status = gr.Markdown("")
+
+            def load_dictionary(file_obj):
+                import json, unicodedata
+                global dictionary_entries
+                if not file_obj:
+                    return "⚠️ ファイルが選択されていません • No file selected"
+                try:
+                    with open(file_obj.name, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    entries = []
+                    if isinstance(data, dict):
+                        # Map form: headword -> definition
+                        for k, v in data.items():
+                            entries.append({
+                                'headword': unicodedata.normalize('NFKC', str(k)),
+                                'gloss': unicodedata.normalize('NFKC', str(v))
+                            })
+                    elif isinstance(data, list):
+                        for it in data:
+                            if isinstance(it, dict):
+                                # Normalize known fields
+                                it = {k: (unicodedata.normalize('NFKC', str(v)) if isinstance(v, str) else v) for k, v in it.items()}
+                                entries.append(it)
+                    else:
+                        return "❌ 未対応のJSON形式 • Unsupported JSON structure"
+                    dictionary_entries = entries
+                    return f"✅ 辞書を読み込みました • Loaded dictionary with {len(entries):,} entries"
+                except Exception as e:
+                    return f"❌ 辞書読み込みエラー • Failed to load dictionary: {e}"
+
+            load_dict_btn.click(load_dictionary, inputs=[dict_file], outputs=[dict_status], show_progress="minimal")
             
             def switch_model(model_name):
                 assistant.model_name = model_name
