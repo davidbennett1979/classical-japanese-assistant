@@ -846,6 +846,21 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         model_status = gr.Textbox(label="Model Status", interactive=False, value=f"Current: {assistant.model_name}")
         model_dropdown.change(switch_model, model_dropdown, model_status)
         
+        # Add model refresh button right after model settings
+        refresh_models_btn = gr.Button("🔄 Refresh Model List")
+        
+        def refresh_models():
+            """Refresh the list of available models"""
+            models = get_installed_models()
+            if not models:
+                return gr.update(choices=[], value=None), "No models found. Please install Ollama models."
+            
+            # Keep current selection if it's still available
+            current_value = assistant.model_name if assistant.model_name in models else models[0]
+            return gr.update(choices=models, value=current_value), f"Found {len(models)} installed models: {', '.join(models)}"
+        
+        refresh_models_btn.click(refresh_models, None, [model_dropdown, model_status])
+        
         gr.Markdown("### Prompt Settings")
         gr.Markdown("Configure which prompts to use for each section:")
         
@@ -866,8 +881,8 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
                     interactive=True
                 )
         
+        prompt_status = gr.Textbox(label="Prompt Status", interactive=False, value="Prompts loaded")
         refresh_prompts_btn = gr.Button("🔄 Refresh Prompt List")
-        prompt_status = gr.Textbox(label="Status", interactive=False, value="Prompts loaded")
         
         def update_chat_prompt(prompt_file):
             assistant.prompt_template = assistant.load_prompt_template(prompt_file)
@@ -889,21 +904,6 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
         chat_prompt_dropdown.change(update_chat_prompt, chat_prompt_dropdown, prompt_status)
         grammar_prompt_dropdown.change(update_grammar_prompt, grammar_prompt_dropdown, prompt_status)
         refresh_prompts_btn.click(refresh_prompt_list, None, [chat_prompt_dropdown, grammar_prompt_dropdown, prompt_status])
-        
-        # Add model refresh button
-        refresh_models_btn = gr.Button("🔄 Refresh Model List")
-        
-        def refresh_models():
-            """Refresh the list of available models"""
-            models = get_installed_models()
-            if not models:
-                return gr.update(choices=[], value=None), "No models found. Please install Ollama models."
-            
-            # Keep current selection if it's still available
-            current_value = assistant.model_name if assistant.model_name in models else models[0]
-            return gr.update(choices=models, value=current_value), f"Found {len(models)} installed models: {', '.join(models)}"
-        
-        refresh_models_btn.click(refresh_models, None, [model_dropdown, model_status])
         
         gr.Markdown("### Database Info")
         stats_box = gr.Textbox(
@@ -960,8 +960,8 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
             ocr_langs = gr.Textbox(label="OCR Languages", value=settings.ocr_langs, info="e.g., jpn+eng")
             ocr_psm = gr.Textbox(label="OCR PSM", value=str(settings.ocr_psm), info="Tesseract page segmentation mode")
             ocr_min_conf = gr.Slider(label="Min Token Confidence", minimum=0, maximum=100, step=1, value=int(settings.ocr_min_conf))
-        save_ocr_btn = gr.Button("Save OCR Settings")
-        save_ocr_status = gr.Textbox(label="Status", interactive=False)
+        save_ocr_status = gr.Textbox(label="OCR Status", interactive=False, value="Current settings loaded")
+        save_ocr_btn = gr.Button("💾 Save OCR Settings")
 
         def _update_env_vars(updates: dict):
             env_path = ".env"
@@ -997,6 +997,7 @@ with gr.Blocks(title="Classical Japanese Learning Assistant", theme=gr.themes.So
 
 # Launch the app
 if __name__ == "__main__":
-    app.queue(concurrency_count=getattr(settings, 'queue_concurrency', 8))  # Enable queuing for streaming
+    # Enable queuing for streaming; omit concurrency kwarg for current Gradio version
+    app.queue()
     # Bind host/port from settings with a safer default host
     app.launch(server_name=settings.gradio_host, server_port=settings.gradio_port, share=False)
