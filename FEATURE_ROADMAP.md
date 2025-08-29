@@ -42,6 +42,14 @@ Transform this from a basic RAG assistant into the ultimate Classical Japanese l
 ## Priority 1: Core Learning Enhancements 🔥
 *These directly improve your learning experience*
 
+### 0. **Hybrid Knowledge System** ⚡ NEW
+- Intelligent routing between textbook knowledge and model's classical literature knowledge
+- Question classifier detects grammar vs literature vs hybrid queries
+- Enhanced responses combining textbook accuracy with real literary examples
+- Smart source indicators showing exactly what knowledge was used
+- **Impact: VERY HIGH** - Unlocks model's deep classical Japanese training while maintaining textbook accuracy
+- **Implementation Plan**: 4-phase rollout with question classification, routing engine, hybrid prompts, and enhanced UI
+
 ### 1. **Interactive Sentence Parser** 
 - Click any sentence to see grammatical breakdown
 - Color-coded particles, verbs, auxiliaries
@@ -59,6 +67,31 @@ Transform this from a basic RAG assistant into the ultimate Classical Japanese l
 - Historical etymology included
 - Links to grammar explanations
 - **Impact: HIGH** - Removes lookup friction
+
+#### 3.a Public Dictionary Integration (JMdict/KANJIDIC2) — Plan
+- Data sources:
+  - JMdict (EDICT successor) for modern Japanese vocabulary (CC BY‑SA license, via EDRDG)
+  - KANJIDIC2 for kanji readings, meanings, stroke counts (CC BY‑SA, via EDRDG)
+  - Optional later: classical filters via JMdict misc tags (e.g., “arch” for archaic) and custom classical addenda
+- Distribution format:
+  - Keep originals in `data/dicts/raw/` (XML)
+  - Convert to normalized JSON in `data/dicts/json/` with schema: `headword`, `reading`, `gloss[]`, `pos[]`, `tags[]`, `source`, `licenses`
+  - Store LICENSE and attribution alongside converted JSON
+- Pipeline:
+  - Script `scripts/fetch_dicts.py` downloads latest JMdict_e and KANJIDIC2 from official mirrors
+  - Script `scripts/convert_jmdict.py` converts XML → JSON (multi‑sense flattening, POS/tags normalization, classical tag extraction)
+  - Versioning with date stamp; do not commit raw XML to repo by default
+- App integration:
+  - Settings → “Load Public Dictionary”: one‑click fetch + convert + load into memory index (uses existing lookup UI)
+  - Toggle: “Classical only” (filters by archaic/older‑kana tags when available)
+  - Fuzzy search fallback (optional) when exact/substring misses
+- Performance & storage:
+  - In‑memory index with NFKC normalization; shard by headword initial for fast prefix search
+  - Optional vector index for gloss search reuse (small model; opt‑in)
+- Legal & UX:
+  - About/Settings page shows CC BY‑SA attribution for EDRDG datasets and links to licenses
+  - Respect license on export (include attribution in exported snippets)
+
 
 ### 4. **Progress Tracking Dashboard**
 - Study streaks, time spent, passages read
@@ -254,11 +287,75 @@ Transform this from a basic RAG assistant into the ultimate Classical Japanese l
 - Community engagement
 
 ## 🚦 Next Steps
-1. Pick top 3 features from Priority 1
-2. Create GitHub issues for each
-3. Set up development branches
-4. Build MVP of each feature
-5. Get user feedback
-6. Iterate and improve
+1. **Hybrid Knowledge System** - Ready for implementation review
+   - Phase 1: Question classifier with keyword detection
+   - Phase 2: Knowledge source router with UI controls  
+   - Phase 3: Hybrid query engine combining both sources
+   - Phase 4: Enhanced source indicators and literature prompts
+2. Pick 2-3 additional features from Priority 1
+3. Create GitHub issues for each selected feature
+4. Set up development branches
+5. Build MVP of each feature
+6. Get user feedback and iterate
 
-What do you think? Which features excite you most? Let's pick 2-3 to tackle first!
+---
+
+## 🧠 Hybrid Knowledge System - Detailed Implementation Plan
+
+### **Technical Architecture**
+
+**New Files to Create**:
+- `question_classifier.py` - Classify questions as TEXTBOOK/LITERATURE/HYBRID/AUTO
+- `knowledge_router.py` - Route to appropriate knowledge source
+- `prompts/literature_expert.md` - Literature-focused prompt template
+- `prompts/hybrid_expert.md` - Combined textbook + literature prompt
+
+**Enhanced Files**:
+- `rag_assistant.py` - Add hybrid query methods
+- `app.py` - UI controls for knowledge source selection
+- `ui_components.py` - Enhanced source indicators
+
+### **Phase 1: Question Classification Engine** (Week 1)
+```python
+# question_classifier.py
+class QuestionClassifier:
+    LITERARY_KEYWORDS = ['poem', 'poetry', 'genji', 'tale', 'kokin', 'manyou', 'author', 'work']
+    GRAMMAR_KEYWORDS = ['particle', 'auxiliary', 'conjugation', 'tense', 'form', 'grammar']
+    HYBRID_KEYWORDS = ['example', 'usage', 'appears', 'used in', 'how does', 'literature']
+    
+    def classify(self, question: str) -> str:
+        # Returns: "TEXTBOOK", "LITERATURE", "HYBRID", or "AUTO"
+```
+
+### **Phase 2: Knowledge Source Router** (Week 2)  
+```python
+# Enhanced rag_assistant.py
+def query_hybrid_stream(self, message, knowledge_mode="auto"):
+    if knowledge_mode == "auto":
+        knowledge_mode = self.classifier.classify(message)
+    
+    if knowledge_mode == "HYBRID":
+        return self._query_with_both_sources(message)
+    elif knowledge_mode == "LITERATURE": 
+        return self._query_model_literature(message)
+    else:
+        return self._query_textbook_only(message)
+```
+
+### **Phase 3: Hybrid Query Engine** (Week 3)
+- Two-stage approach: Get textbook context, then enhance with model knowledge
+- Literature-aware prompting that encourages classical text citations
+- Smart source attribution showing both textbook pages AND literary works
+
+### **Phase 4: Enhanced UI & Indicators** (Week 4)
+- Knowledge source selector in chat interface
+- Enhanced source display with textbook + literature sections
+- Color-coded indicators for different knowledge types
+
+### **Success Criteria**
+1. ✅ User asks grammar question → Gets textbook explanation + literary examples
+2. ✅ User asks about specific classical work → Gets rich model knowledge response  
+3. ✅ User sees clear indication of knowledge sources used
+4. ✅ Responses are more comprehensive without losing accuracy
+
+**Ready to proceed with implementation?**
